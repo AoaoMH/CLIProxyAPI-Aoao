@@ -196,6 +196,9 @@ func (h *Handler) DeleteBackup(c *gin.Context) {
 func (h *Handler) DownloadBackup(c *gin.Context) {
 	name := c.Param("name")
 	if name == "" {
+		name = c.Query("name")
+	}
+	if name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "backup name is required"})
 		return
 	}
