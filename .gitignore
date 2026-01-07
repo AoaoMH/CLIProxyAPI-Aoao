@@ -5,6 +5,7 @@ cli-proxy-api
 # Configuration
 config.yaml
 .env
+CPA.code-workspace
 
 # Generated content
 bin/*
