@@ -6,8 +6,8 @@ on:
       - v*
 
 env:
-  APP_NAME: CLIProxyAPI
-  DOCKERHUB_REPO: eceasy/cli-proxy-api
+  APP_NAME: CLIProxyAPI-Aoao
+  DOCKERHUB_REPO: aoaomh/cli-proxy-api
 
 jobs:
   docker:
