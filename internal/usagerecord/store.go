@@ -604,15 +604,15 @@ func (s *Store) GetActivityHeatmap(ctx context.Context, days int) (*ActivityHeat
 
 // ModelStats represents usage statistics for a single model.
 type ModelStats struct {
-	Model        string `json:"model"`
-	Provider     string `json:"provider"`
-	RequestCount int64  `json:"request_count"`
-	SuccessCount int64  `json:"success_count"`
-	FailureCount int64  `json:"failure_count"`
-	InputTokens  int64  `json:"input_tokens"`
-	OutputTokens int64  `json:"output_tokens"`
-	TotalTokens  int64  `json:"total_tokens"`
-	AvgDuration  int64  `json:"avg_duration_ms"`
+	Model        string  `json:"model"`
+	Provider     string  `json:"provider"`
+	RequestCount int64   `json:"request_count"`
+	SuccessCount int64   `json:"success_count"`
+	FailureCount int64   `json:"failure_count"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	TotalTokens  int64   `json:"total_tokens"`
+	AvgDuration  float64 `json:"avg_duration_ms"`
 }
 
 // ModelStatsResult contains the list of model statistics.
@@ -691,13 +691,13 @@ func (s *Store) GetModelStats(ctx context.Context, startTime, endTime string) (*
 
 // ProviderStats represents usage statistics for a single provider.
 type ProviderStats struct {
-	Provider     string `json:"provider"`
-	RequestCount int64  `json:"request_count"`
-	SuccessCount int64  `json:"success_count"`
-	FailureCount int64  `json:"failure_count"`
-	TotalTokens  int64  `json:"total_tokens"`
-	AvgDuration  int64  `json:"avg_duration_ms"`
-	ModelCount   int64  `json:"model_count"`
+	Provider     string  `json:"provider"`
+	RequestCount int64   `json:"request_count"`
+	SuccessCount int64   `json:"success_count"`
+	FailureCount int64   `json:"failure_count"`
+	TotalTokens  int64   `json:"total_tokens"`
+	AvgDuration  float64 `json:"avg_duration_ms"`
+	ModelCount   int64   `json:"model_count"`
 }
 
 // ProviderStatsResult contains the list of provider statistics.
@@ -780,7 +780,7 @@ type UsageSummary struct {
 	TotalTokens     int64   `json:"total_tokens"`
 	InputTokens     int64   `json:"input_tokens"`
 	OutputTokens    int64   `json:"output_tokens"`
-	AvgDuration     int64   `json:"avg_duration_ms"`
+	AvgDuration     float64 `json:"avg_duration_ms"`
 	UniqueModels    int64   `json:"unique_models"`
 	UniqueProviders int64   `json:"unique_providers"`
 }
