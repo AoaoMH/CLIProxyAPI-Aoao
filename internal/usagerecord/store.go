@@ -652,8 +652,8 @@ func (s *Store) GetModelStats(ctx context.Context, startTime, endTime string) (*
 			model,
 			provider,
 			COUNT(*) as request_count,
-			SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count,
-			SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failure_count,
+			COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as success_count,
+			COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) as failure_count,
 			COALESCE(SUM(input_tokens), 0) as input_tokens,
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
@@ -736,8 +736,8 @@ func (s *Store) GetProviderStats(ctx context.Context, startTime, endTime string)
 		SELECT 
 			provider,
 			COUNT(*) as request_count,
-			SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_count,
-			SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failure_count,
+			COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as success_count,
+			COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) as failure_count,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
 			COALESCE(AVG(duration_ms), 0) as avg_duration,
 			COUNT(DISTINCT model) as model_count
@@ -814,8 +814,8 @@ func (s *Store) GetUsageSummary(ctx context.Context, startTime, endTime string) 
 	query := fmt.Sprintf(`
 		SELECT 
 			COUNT(*) as total_requests,
-			SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as success_requests,
-			SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failure_requests,
+			COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as success_requests,
+			COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) as failure_requests,
 			COALESCE(SUM(input_tokens), 0) as input_tokens,
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
