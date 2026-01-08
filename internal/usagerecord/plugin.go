@@ -168,6 +168,7 @@ func (p *Plugin) HandleUsage(ctx context.Context, record coreusage.Record) {
 	}
 
 	// Create the record
+	// Always calculate total tokens as input + output (API-returned total may be inaccurate)
 	rec := &Record{
 		RequestID:       requestID,
 		Timestamp:       timestamp,
@@ -179,7 +180,7 @@ func (p *Plugin) HandleUsage(ctx context.Context, record coreusage.Record) {
 		IsStreaming:     isStreaming,
 		InputTokens:     record.Detail.InputTokens,
 		OutputTokens:    record.Detail.OutputTokens,
-		TotalTokens:     record.Detail.TotalTokens,
+		TotalTokens:     record.Detail.InputTokens + record.Detail.OutputTokens,
 		DurationMs:      durationMs,
 		StatusCode:      statusCode,
 		Success:         success,
@@ -189,11 +190,6 @@ func (p *Plugin) HandleUsage(ctx context.Context, record coreusage.Record) {
 		RequestBody:     requestBody,
 		ResponseHeaders: responseHeaders,
 		ResponseBody:    responseBody,
-	}
-
-	// Calculate total tokens if not provided
-	if rec.TotalTokens == 0 {
-		rec.TotalTokens = rec.InputTokens + rec.OutputTokens
 	}
 
 	// Insert asynchronously to avoid blocking the request
