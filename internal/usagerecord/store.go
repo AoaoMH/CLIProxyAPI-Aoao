@@ -543,20 +543,22 @@ func (s *Store) GetActivityHeatmap(ctx context.Context, days int) (*ActivityHeat
 	endDate := time.Now()
 	startDate := endDate.AddDate(0, 0, -days+1)
 
+	// NOTE: timestamps may be stored with various formats/timezones depending on driver.
+	// Using `substr(timestamp, 1, 10)` is more robust than `date(timestamp)`.
 	query := `
-		SELECT 
-			date(timestamp) as day,
+		SELECT
+			substr(timestamp, 1, 10) as day,
 			COUNT(*) as requests,
 			COALESCE(SUM(total_tokens), 0) as total_tokens
 		FROM usage_records
-		WHERE timestamp >= ? AND timestamp < ?
-		GROUP BY date(timestamp)
+		WHERE substr(timestamp, 1, 10) >= ? AND substr(timestamp, 1, 10) <= ?
+		GROUP BY substr(timestamp, 1, 10)
 		ORDER BY day ASC
 	`
 
 	rows, err := s.db.QueryContext(ctx, query,
 		startDate.Format("2006-01-02"),
-		endDate.AddDate(0, 0, 1).Format("2006-01-02"),
+		endDate.Format("2006-01-02"),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query heatmap data: %w", err)
@@ -706,6 +708,73 @@ type ProviderStatsResult struct {
 	TotalProviders int             `json:"total_providers"`
 }
 
+type DistinctOptionsResult struct {
+	Models    []string `json:"models"`
+	Providers []string `json:"providers"`
+}
+
+func (s *Store) GetDistinctOptions(ctx context.Context, startTime, endTime string) (*DistinctOptionsResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, fmt.Errorf("store is closed")
+	}
+
+	var conditions []string
+	var args []interface{}
+
+	if startTime != "" {
+		conditions = append(conditions, "timestamp >= ?")
+		args = append(args, startTime)
+	}
+	if endTime != "" {
+		conditions = append(conditions, "timestamp <= ?")
+		args = append(args, endTime)
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	modelQuery := fmt.Sprintf(`SELECT DISTINCT model FROM usage_records %s ORDER BY model ASC`, whereClause)
+	providerQuery := fmt.Sprintf(`SELECT DISTINCT provider FROM usage_records %s ORDER BY provider ASC`, whereClause)
+
+	models, err := queryDistinctStrings(ctx, s.db, modelQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	providers, err := queryDistinctStrings(ctx, s.db, providerQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DistinctOptionsResult{Models: models, Providers: providers}, nil
+}
+
+func queryDistinctStrings(ctx context.Context, db *sql.DB, query string, args ...interface{}) ([]string, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query distinct options: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
 // GetProviderStats returns usage statistics grouped by provider.
 func (s *Store) GetProviderStats(ctx context.Context, startTime, endTime string) (*ProviderStatsResult, error) {
 	s.mu.RLock()
@@ -841,4 +910,129 @@ func (s *Store) GetUsageSummary(ctx context.Context, startTime, endTime string) 
 	}
 
 	return &summary, nil
+}
+
+// RequestTimelinePoint represents a single point in the hourly request timeline.
+type RequestTimelinePoint struct {
+	Hour     string `json:"hour"`     // Format: "2006-01-02 15:00"
+	Requests int64  `json:"requests"` // Number of requests in this hour
+	Tokens   int64  `json:"tokens"`   // Total tokens in this hour
+}
+
+// RequestTimelineResult contains the hourly request distribution data.
+type RequestTimelineResult struct {
+	StartTime   string                 `json:"start_time"`
+	EndTime     string                 `json:"end_time"`
+	TotalHours  int                    `json:"total_hours"`
+	MaxRequests int64                  `json:"max_requests"`
+	Points      []RequestTimelinePoint `json:"points"`
+}
+
+// GetRequestTimeline returns hourly request distribution for timeline visualization.
+func (s *Store) GetRequestTimeline(ctx context.Context, startTime, endTime string) (*RequestTimelineResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, fmt.Errorf("store is closed")
+	}
+
+	var conditions []string
+	var args []interface{}
+
+	if startTime != "" {
+		conditions = append(conditions, "timestamp >= ?")
+		args = append(args, startTime)
+	}
+	if endTime != "" {
+		conditions = append(conditions, "timestamp <= ?")
+		args = append(args, endTime)
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	// Group by hour (extract YYYY-MM-DD HH from timestamp)
+	query := fmt.Sprintf(`
+		SELECT 
+			substr(timestamp, 1, 13) as hour,
+			COUNT(*) as requests,
+			COALESCE(SUM(total_tokens), 0) as tokens
+		FROM usage_records
+		%s
+		GROUP BY hour
+		ORDER BY hour ASC
+	`, whereClause)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query request timeline: %w", err)
+	}
+	defer rows.Close()
+
+	dataMap := make(map[string]RequestTimelinePoint)
+	var maxRequests int64
+
+	for rows.Next() {
+		var hour string
+		var requests, tokens int64
+		if err := rows.Scan(&hour, &requests, &tokens); err != nil {
+			continue
+		}
+		// Convert "2006-01-02T15" to "2006-01-02 15:00" for display
+		displayHour := strings.Replace(hour, "T", " ", 1) + ":00"
+		dataMap[displayHour] = RequestTimelinePoint{
+			Hour:     displayHour,
+			Requests: requests,
+			Tokens:   tokens,
+		}
+		if requests > maxRequests {
+			maxRequests = requests
+		}
+	}
+
+	// Build complete hourly timeline
+	var startDate, endDate time.Time
+	now := time.Now().UTC()
+
+	if startTime != "" {
+		startDate, _ = time.Parse(time.RFC3339, startTime)
+	} else {
+		// Default to last 24 hours
+		startDate = now.Add(-24 * time.Hour)
+	}
+	if endTime != "" {
+		endDate, _ = time.Parse(time.RFC3339, endTime)
+	} else {
+		endDate = now
+	}
+
+	// Truncate to hour
+	startDate = startDate.Truncate(time.Hour)
+	endDate = endDate.Truncate(time.Hour)
+
+	// Fill in all hours
+	var points []RequestTimelinePoint
+	for h := startDate; !h.After(endDate); h = h.Add(time.Hour) {
+		hourStr := h.Format("2006-01-02 15:00")
+		if data, exists := dataMap[hourStr]; exists {
+			points = append(points, data)
+		} else {
+			points = append(points, RequestTimelinePoint{
+				Hour:     hourStr,
+				Requests: 0,
+				Tokens:   0,
+			})
+		}
+	}
+
+	return &RequestTimelineResult{
+		StartTime:   startDate.Format(time.RFC3339),
+		EndTime:     endDate.Format(time.RFC3339),
+		TotalHours:  len(points),
+		MaxRequests: maxRequests,
+		Points:      points,
+	}, nil
 }

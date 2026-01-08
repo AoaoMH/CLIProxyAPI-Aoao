@@ -44,6 +44,26 @@ func (h *Handler) GetUsageRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// GetRequestTimeline returns hourly request distribution for timeline visualization.
+func (h *Handler) GetRequestTimeline(c *gin.Context) {
+	store := usagerecord.DefaultStore()
+	if store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "usage records not available"})
+		return
+	}
+
+	startTime := c.Query("start_time")
+	endTime := c.Query("end_time")
+
+	result, err := store.GetRequestTimeline(c.Request.Context(), startTime, endTime)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 // GetUsageRecordByID returns a single usage record with full details.
 func (h *Handler) GetUsageRecordByID(c *gin.Context) {
 	store := usagerecord.DefaultStore()
@@ -128,6 +148,26 @@ func (h *Handler) GetActivityHeatmap(c *gin.Context) {
 	}
 
 	result, err := store.GetActivityHeatmap(c.Request.Context(), days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// GetUsageRecordOptions returns distinct model/provider options for filters.
+func (h *Handler) GetUsageRecordOptions(c *gin.Context) {
+	store := usagerecord.DefaultStore()
+	if store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "usage records not available"})
+		return
+	}
+
+	startTime := c.Query("start_time")
+	endTime := c.Query("end_time")
+
+	result, err := store.GetDistinctOptions(c.Request.Context(), startTime, endTime)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
