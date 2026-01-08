@@ -648,9 +648,11 @@ func (s *Server) registerManagementRoutes() {
 
 		// Usage analytics routes
 		mgmt.GET("/usage-records/heatmap", s.mgmt.GetActivityHeatmap)
+		mgmt.GET("/usage-records/options", s.mgmt.GetUsageRecordOptions)
 		mgmt.GET("/usage-records/model-stats", s.mgmt.GetModelStats)
 		mgmt.GET("/usage-records/provider-stats", s.mgmt.GetProviderStats)
 		mgmt.GET("/usage-records/summary", s.mgmt.GetUsageSummary)
+		mgmt.GET("/usage-records/timeline", s.mgmt.GetRequestTimeline)
 	}
 }
 
