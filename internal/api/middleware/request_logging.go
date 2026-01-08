@@ -45,8 +45,12 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 			return
 		}
 
+		// Store request information in context for usage record plugin
+		c.Set("request_body_for_log", requestInfo.Body)
+		c.Set("request_id", requestInfo.RequestID)
+
 		// Create response writer wrapper
-		wrapper := NewResponseWriterWrapper(c.Writer, logger, requestInfo)
+		wrapper := NewResponseWriterWrapper(c.Writer, logger, requestInfo, c)
 		if !logger.IsEnabled() {
 			wrapper.logOnErrorOnly = true
 		}

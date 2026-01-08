@@ -27,6 +27,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usagerecord"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
@@ -265,6 +266,14 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 	s.mgmt.SetLogDirectory(logDir)
 	s.localPassword = optionState.localPassword
+
+	// Initialize usage records SQLite storage
+	if err := usagerecord.InitDefaultStore(logDir); err != nil {
+		log.WithError(err).Warn("failed to initialize usage record store")
+	} else {
+		usagerecord.SetStore(usagerecord.DefaultStore())
+		usagerecord.Register()
+	}
 
 	// Setup routes
 	s.setupRoutes()
@@ -631,6 +640,17 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/backups/download/:name", s.mgmt.DownloadBackup)
 		mgmt.POST("/backups/restore", s.mgmt.RestoreBackup)
 		mgmt.POST("/backups/upload", s.mgmt.UploadAndRestoreBackup)
+
+		// Usage records routes
+		mgmt.GET("/usage-records", s.mgmt.GetUsageRecords)
+		mgmt.GET("/usage-records/:id", s.mgmt.GetUsageRecordByID)
+		mgmt.DELETE("/usage-records", s.mgmt.DeleteOldUsageRecords)
+
+		// Usage analytics routes
+		mgmt.GET("/usage-records/heatmap", s.mgmt.GetActivityHeatmap)
+		mgmt.GET("/usage-records/model-stats", s.mgmt.GetModelStats)
+		mgmt.GET("/usage-records/provider-stats", s.mgmt.GetProviderStats)
+		mgmt.GET("/usage-records/summary", s.mgmt.GetUsageSummary)
 	}
 }
 
