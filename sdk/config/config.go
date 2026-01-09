@@ -24,6 +24,7 @@ type PayloadModelRule = internalconfig.PayloadModelRule
 type GeminiKey = internalconfig.GeminiKey
 type CodexKey = internalconfig.CodexKey
 type ClaudeKey = internalconfig.ClaudeKey
+type ApiKeyEntry = internalconfig.ApiKeyEntry
 type VertexCompatKey = internalconfig.VertexCompatKey
 type VertexCompatModel = internalconfig.VertexCompatModel
 type OpenAICompatibility = internalconfig.OpenAICompatibility
@@ -38,7 +39,7 @@ const (
 	DefaultPanelGitHubRepository   = internalconfig.DefaultPanelGitHubRepository
 )
 
-func MakeInlineAPIKeyProvider(keys []string) *AccessProvider {
+func MakeInlineAPIKeyProvider(keys []ApiKeyEntry) *AccessProvider {
 	return internalconfig.MakeInlineAPIKeyProvider(keys)
 }
 
