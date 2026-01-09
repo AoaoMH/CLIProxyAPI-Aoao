@@ -666,7 +666,23 @@ func syncInlineAccessProvider(cfg *Config) {
 	}
 	if len(cfg.APIKeys) == 0 {
 		if provider := cfg.ConfigAPIKeyProvider(); provider != nil && len(provider.APIKeys) > 0 {
-			cfg.APIKeys = append([]string(nil), provider.APIKeys...)
+			// Convert []string from provider to []ApiKeyEntry
+			now := cfg.APIKeys // Keep existing entries if any
+			for _, key := range provider.APIKeys {
+				found := false
+				for _, entry := range now {
+					if entry.Key == key {
+						found = true
+						break
+					}
+				}
+				if !found {
+					cfg.APIKeys = append(cfg.APIKeys, ApiKeyEntry{
+						Key:      key,
+						IsActive: true,
+					})
+				}
+			}
 		}
 	}
 	cfg.Access.Providers = nil

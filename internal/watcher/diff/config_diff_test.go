@@ -187,7 +187,7 @@ func TestBuildConfigChangeDetails_NilSafe(t *testing.T) {
 func TestBuildConfigChangeDetails_SecretsAndCounts(t *testing.T) {
 	oldCfg := &config.Config{
 		SDKConfig: sdkconfig.SDKConfig{
-			APIKeys: []string{"a"},
+			APIKeys: []sdkconfig.ApiKeyEntry{{Key: "a", IsActive: true}},
 		},
 		AmpCode: config.AmpCode{
 			UpstreamAPIKey: "",
@@ -198,7 +198,7 @@ func TestBuildConfigChangeDetails_SecretsAndCounts(t *testing.T) {
 	}
 	newCfg := &config.Config{
 		SDKConfig: sdkconfig.SDKConfig{
-			APIKeys: []string{"a", "b", "c"},
+			APIKeys: []sdkconfig.ApiKeyEntry{{Key: "a", IsActive: true}, {Key: "b", IsActive: true}, {Key: "c", IsActive: true}},
 		},
 		AmpCode: config.AmpCode{
 			UpstreamAPIKey: "new-key",
@@ -233,7 +233,7 @@ func TestBuildConfigChangeDetails_FlagsAndKeys(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog:       false,
 			ProxyURL:         "http://old-proxy",
-			APIKeys:          []string{"key-1"},
+			APIKeys:          []sdkconfig.ApiKeyEntry{{Key: "key-1", IsActive: true}},
 			ForceModelPrefix: false,
 		},
 	}
@@ -269,7 +269,7 @@ func TestBuildConfigChangeDetails_FlagsAndKeys(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog:       true,
 			ProxyURL:         "http://new-proxy",
-			APIKeys:          []string{" key-1 ", "key-2"},
+			APIKeys:          []sdkconfig.ApiKeyEntry{{Key: " key-1 ", IsActive: true}, {Key: "key-2", IsActive: true}},
 			ForceModelPrefix: true,
 		},
 	}
@@ -337,7 +337,7 @@ func TestBuildConfigChangeDetails_AllBranches(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog: false,
 			ProxyURL:   "http://old-proxy",
-			APIKeys:    []string{" keyA "},
+			APIKeys:    []sdkconfig.ApiKeyEntry{{Key: " keyA ", IsActive: true}},
 		},
 		OAuthExcludedModels: map[string][]string{"p1": {"a"}},
 		OpenAICompatibility: []config.OpenAICompatibility{
@@ -389,7 +389,7 @@ func TestBuildConfigChangeDetails_AllBranches(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog: true,
 			ProxyURL:   "http://new-proxy",
-			APIKeys:    []string{"keyB"},
+			APIKeys:    []sdkconfig.ApiKeyEntry{{Key: "keyB", IsActive: true}},
 		},
 		OAuthExcludedModels: map[string][]string{"p1": {"b", "c"}, "p2": {"d"}},
 		OpenAICompatibility: []config.OpenAICompatibility{

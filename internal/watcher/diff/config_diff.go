@@ -3,7 +3,6 @@ package diff
 import (
 	"fmt"
 	"net/url"
-	"reflect"
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
@@ -66,7 +65,7 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	// API keys (redacted) and counts
 	if len(oldCfg.APIKeys) != len(newCfg.APIKeys) {
 		changes = append(changes, fmt.Sprintf("api-keys count: %d -> %d", len(oldCfg.APIKeys), len(newCfg.APIKeys)))
-	} else if !reflect.DeepEqual(trimStrings(oldCfg.APIKeys), trimStrings(newCfg.APIKeys)) {
+	} else if !apiKeyEntriesEqual(oldCfg.APIKeys, newCfg.APIKeys) {
 		changes = append(changes, "api-keys: values updated (count unchanged, redacted)")
 	}
 	if len(oldCfg.GeminiKey) != len(newCfg.GeminiKey) {
@@ -359,6 +358,26 @@ func equalUpstreamAPIKeys(a, b []config.AmpUpstreamAPIKeyEntry) bool {
 			return false
 		}
 		if !equalStringSet(a[i].APIKeys, b[i].APIKeys) {
+			return false
+		}
+	}
+	return true
+}
+
+// apiKeyEntriesEqual compares two slices of ApiKeyEntry for equality.
+// Only compares key values and active status, ignores metadata like usage counts.
+func apiKeyEntriesEqual(a, b []config.ApiKeyEntry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if strings.TrimSpace(a[i].Key) != strings.TrimSpace(b[i].Key) {
+			return false
+		}
+		if a[i].IsActive != b[i].IsActive {
+			return false
+		}
+		if strings.TrimSpace(a[i].Name) != strings.TrimSpace(b[i].Name) {
 			return false
 		}
 	}

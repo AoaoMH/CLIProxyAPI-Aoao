@@ -28,7 +28,7 @@ func newTestServer(t *testing.T) *Server {
 
 	cfg := &proxyconfig.Config{
 		SDKConfig: sdkconfig.SDKConfig{
-			APIKeys: []string{"test-key"},
+			APIKeys: []sdkconfig.ApiKeyEntry{{Key: "test-key", IsActive: true}},
 		},
 		Port:                   0,
 		AuthDir:                authDir,
