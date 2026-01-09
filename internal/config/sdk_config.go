@@ -50,6 +50,32 @@ func (e *ApiKeyEntry) GetUsageCount() int64 {
 	return atomic.LoadInt64(&e.UsageCount)
 }
 
+// UnmarshalYAML implements custom YAML unmarshaling for ApiKeyEntry.
+// This allows backward compatibility with simple string format API keys.
+// Supports both:
+//   - Simple string format: "your-api-key"
+//   - Extended format: { api-key: "your-api-key", is-active: true, ... }
+func (e *ApiKeyEntry) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// First, try to unmarshal as a simple string (legacy format)
+	var simpleKey string
+	if err := unmarshal(&simpleKey); err == nil && simpleKey != "" {
+		e.Key = simpleKey
+		e.IsActive = true // Default to active for legacy format
+		return nil
+	}
+
+	// Otherwise, unmarshal as the full struct format
+	// Use an alias type to avoid infinite recursion
+	type apiKeyEntryAlias ApiKeyEntry
+	var alias apiKeyEntryAlias
+	if err := unmarshal(&alias); err != nil {
+		return err
+	}
+
+	*e = ApiKeyEntry(alias)
+	return nil
+}
+
 // SDKConfig represents the application's configuration, loaded from a YAML file.
 type SDKConfig struct {
 	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
