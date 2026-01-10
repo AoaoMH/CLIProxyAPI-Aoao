@@ -5,7 +5,6 @@
 package config
 
 import (
-	"sync"
 	"sync/atomic"
 )
 
@@ -27,27 +26,50 @@ type ApiKeyEntry struct {
 	// Use atomic operations for thread-safe updates.
 	UsageCount int64 `yaml:"usage-count,omitempty" json:"usage-count,omitempty"`
 
+	// InputTokens tracks total input tokens consumed by this key.
+	InputTokens int64 `yaml:"input-tokens,omitempty" json:"input-tokens,omitempty"`
+
+	// OutputTokens tracks total output tokens consumed by this key.
+	OutputTokens int64 `yaml:"output-tokens,omitempty" json:"output-tokens,omitempty"`
+
 	// LastUsedAt is the ISO 8601 timestamp of the last usage.
 	LastUsedAt string `yaml:"last-used-at,omitempty" json:"last-used-at,omitempty"`
 
 	// CreatedAt is the ISO 8601 timestamp when this key was created.
 	CreatedAt string `yaml:"created-at,omitempty" json:"created-at,omitempty"`
-
-	// mu protects LastUsedAt updates
-	mu sync.Mutex `yaml:"-" json:"-"`
 }
 
-// IncrementUsage atomically increments the usage count and updates last used time.
+// IncrementUsage atomically increments the usage count.
+// Note: LastUsedAt is updated by the caller separately (not thread-safe for that field).
 func (e *ApiKeyEntry) IncrementUsage(timestamp string) {
 	atomic.AddInt64(&e.UsageCount, 1)
-	e.mu.Lock()
+	// LastUsedAt update is best-effort; in high concurrency the last writer wins
 	e.LastUsedAt = timestamp
-	e.mu.Unlock()
+}
+
+// IncrementTokens atomically increments input and output token counts.
+func (e *ApiKeyEntry) IncrementTokens(inputTokens, outputTokens int64) {
+	if inputTokens > 0 {
+		atomic.AddInt64(&e.InputTokens, inputTokens)
+	}
+	if outputTokens > 0 {
+		atomic.AddInt64(&e.OutputTokens, outputTokens)
+	}
 }
 
 // GetUsageCount returns the current usage count atomically.
 func (e *ApiKeyEntry) GetUsageCount() int64 {
 	return atomic.LoadInt64(&e.UsageCount)
+}
+
+// GetInputTokens returns the current input token count atomically.
+func (e *ApiKeyEntry) GetInputTokens() int64 {
+	return atomic.LoadInt64(&e.InputTokens)
+}
+
+// GetOutputTokens returns the current output token count atomically.
+func (e *ApiKeyEntry) GetOutputTokens() int64 {
+	return atomic.LoadInt64(&e.OutputTokens)
 }
 
 // UnmarshalYAML implements custom YAML unmarshaling for ApiKeyEntry.
