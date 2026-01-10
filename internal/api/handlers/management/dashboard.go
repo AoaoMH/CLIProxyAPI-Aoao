@@ -126,9 +126,7 @@ func (h *Handler) GetDashboardStats(c *gin.Context) {
 		UniqueProviders: summary.UniqueProviders,
 	}
 
-	// Build daily stats from heatmap
-	// Note: heatmap only has Date, Requests, TotalTokens
-	// For avg_response_time and unique_models per day, we use summary-level data
+	// Build daily stats from heatmap (now includes per-day avg_duration and unique_models)
 	dailyStats := make([]DailyStatsItem, 0, len(heatmap.Days))
 	requestTrend := make([]TrendPoint, 0, len(heatmap.Days))
 
@@ -137,8 +135,8 @@ func (h *Handler) GetDashboardStats(c *gin.Context) {
 			Date:            day.Date,
 			Requests:        day.Requests,
 			Tokens:          day.TotalTokens,
-			AvgResponseTime: summary.AvgDuration / 1000, // Use overall avg as approximation
-			UniqueModels:    summary.UniqueModels,       // Use overall count as approximation
+			AvgResponseTime: day.AvgDuration / 1000, // convert ms to seconds
+			UniqueModels:    day.UniqueModels,
 		})
 		requestTrend = append(requestTrend, TrendPoint{
 			Date:     day.Date,

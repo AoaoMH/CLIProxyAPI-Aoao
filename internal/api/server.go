@@ -273,6 +273,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	} else {
 		usagerecord.SetStore(usagerecord.DefaultStore())
 		usagerecord.Register()
+		// Set callback to increment API key token counts on each usage record
+		usagerecord.SetTokenIncrementor(s.mgmt.IncrementAPIKeyTokens)
+		// Set callback to increment API key usage count and last used time
+		usagerecord.SetUsageIncrementor(s.mgmt.IncrementAPIKeyUsage)
 	}
 
 	// Setup routes

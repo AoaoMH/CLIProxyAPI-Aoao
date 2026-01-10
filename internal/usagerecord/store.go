@@ -510,9 +510,11 @@ func MaskAPIKey(key string) string {
 
 // ActivityHeatmapDay represents a single day in the activity heatmap.
 type ActivityHeatmapDay struct {
-	Date        string `json:"date"`
-	Requests    int64  `json:"requests"`
-	TotalTokens int64  `json:"total_tokens"`
+	Date         string  `json:"date"`
+	Requests     int64   `json:"requests"`
+	TotalTokens  int64   `json:"total_tokens"`
+	AvgDuration  float64 `json:"avg_duration"`  // average duration in ms
+	UniqueModels int64   `json:"unique_models"` // count of unique models used
 }
 
 // ActivityHeatmap represents the activity heatmap data.
@@ -549,7 +551,9 @@ func (s *Store) GetActivityHeatmap(ctx context.Context, days int) (*ActivityHeat
 		SELECT
 			substr(timestamp, 1, 10) as day,
 			COUNT(*) as requests,
-			COALESCE(SUM(total_tokens), 0) as total_tokens
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(AVG(duration), 0) as avg_duration,
+			COUNT(DISTINCT model) as unique_models
 		FROM usage_records
 		WHERE substr(timestamp, 1, 10) >= ? AND substr(timestamp, 1, 10) <= ?
 		GROUP BY substr(timestamp, 1, 10)
@@ -571,7 +575,7 @@ func (s *Store) GetActivityHeatmap(ctx context.Context, days int) (*ActivityHeat
 
 	for rows.Next() {
 		var day ActivityHeatmapDay
-		if err := rows.Scan(&day.Date, &day.Requests, &day.TotalTokens); err != nil {
+		if err := rows.Scan(&day.Date, &day.Requests, &day.TotalTokens, &day.AvgDuration, &day.UniqueModels); err != nil {
 			continue
 		}
 		dataMap[day.Date] = day
@@ -926,6 +930,58 @@ type RequestTimelineResult struct {
 	TotalHours  int                    `json:"total_hours"`
 	MaxRequests int64                  `json:"max_requests"`
 	Points      []RequestTimelinePoint `json:"points"`
+}
+
+// APIKeyStats represents aggregated statistics for a single API key.
+type APIKeyStats struct {
+	APIKey       string `json:"api_key"`
+	UsageCount   int64  `json:"usage_count"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+	LastUsedAt   string `json:"last_used_at"`
+}
+
+// GetAPIKeyStats returns aggregated statistics for all API keys from the usage records.
+// This provides persistent data that survives server restarts.
+func (s *Store) GetAPIKeyStats(ctx context.Context) (map[string]*APIKeyStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, fmt.Errorf("store is closed")
+	}
+
+	query := `
+		SELECT 
+			api_key,
+			COUNT(*) as usage_count,
+			COALESCE(SUM(input_tokens), 0) as input_tokens,
+			COALESCE(SUM(output_tokens), 0) as output_tokens,
+			MAX(timestamp) as last_used_at
+		FROM usage_records
+		WHERE api_key != ''
+		GROUP BY api_key
+	`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query API key stats: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]*APIKeyStats)
+	for rows.Next() {
+		var stats APIKeyStats
+		if err := rows.Scan(
+			&stats.APIKey, &stats.UsageCount, &stats.InputTokens,
+			&stats.OutputTokens, &stats.LastUsedAt,
+		); err != nil {
+			continue
+		}
+		result[stats.APIKey] = &stats
+	}
+
+	return result, nil
 }
 
 // GetRequestTimeline returns hourly request distribution for timeline visualization.

@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usagerecord"
 )
 
 // Generic helpers for list[string]
@@ -106,8 +108,59 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 	c.JSON(400, gin.H{"error": "missing index or value"})
 }
 
+// apiKeyResponse is a DTO for API key responses (avoids copying mutex from config.ApiKeyEntry)
+type apiKeyResponse struct {
+	ID           string `json:"id,omitempty"`
+	Key          string `json:"api-key"`
+	Name         string `json:"name,omitempty"`
+	IsActive     bool   `json:"is-active"`
+	UsageCount   int64  `json:"usage-count,omitempty"`
+	InputTokens  int64  `json:"input-tokens,omitempty"`
+	OutputTokens int64  `json:"output-tokens,omitempty"`
+	LastUsedAt   string `json:"last-used-at,omitempty"`
+	CreatedAt    string `json:"created-at,omitempty"`
+}
+
 // api-keys
-func (h *Handler) GetAPIKeys(c *gin.Context) { c.JSON(200, gin.H{"api-keys": h.cfg.APIKeys}) }
+func (h *Handler) GetAPIKeys(c *gin.Context) {
+	// Get persistent stats from SQLite database
+	var persistentStats map[string]*usagerecord.APIKeyStats
+	if store := usagerecord.DefaultStore(); store != nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
+		var err error
+		persistentStats, err = store.GetAPIKeyStats(ctx)
+		if err != nil {
+			// Log error but continue with empty stats
+			c.Error(err)
+		}
+	}
+
+	// Build response DTOs (avoids copying mutex from config.ApiKeyEntry)
+	apiKeys := make([]apiKeyResponse, len(h.cfg.APIKeys))
+	for i, entry := range h.cfg.APIKeys {
+		apiKeys[i] = apiKeyResponse{
+			ID:         entry.ID,
+			Key:        entry.Key,
+			Name:       entry.Name,
+			IsActive:   entry.IsActive,
+			CreatedAt:  entry.CreatedAt,
+			LastUsedAt: entry.LastUsedAt,
+		}
+		// Merge persistent stats from SQLite if available
+		if stats, ok := persistentStats[entry.Key]; ok {
+			// Use persistent stats (from DB) as the source of truth
+			apiKeys[i].UsageCount = stats.UsageCount
+			apiKeys[i].InputTokens = stats.InputTokens
+			apiKeys[i].OutputTokens = stats.OutputTokens
+			if stats.LastUsedAt != "" {
+				apiKeys[i].LastUsedAt = stats.LastUsedAt
+			}
+		}
+	}
+
+	c.JSON(200, gin.H{"api-keys": apiKeys})
+}
 
 func (h *Handler) PutAPIKeys(c *gin.Context) {
 	data, err := c.GetRawData()
@@ -461,6 +514,17 @@ func (h *Handler) IncrementAPIKeyUsageByID(id string) {
 	for i := range h.cfg.APIKeys {
 		if h.cfg.APIKeys[i].ID == id {
 			h.cfg.APIKeys[i].IncrementUsage(now)
+			return
+		}
+	}
+}
+
+// IncrementAPIKeyTokens atomically increments the token counts for an API key.
+// It looks up the key by its value and increments both input and output token counts.
+func (h *Handler) IncrementAPIKeyTokens(apiKey string, inputTokens, outputTokens int64) {
+	for i := range h.cfg.APIKeys {
+		if h.cfg.APIKeys[i].Key == apiKey {
+			h.cfg.APIKeys[i].IncrementTokens(inputTokens, outputTokens)
 			return
 		}
 	}

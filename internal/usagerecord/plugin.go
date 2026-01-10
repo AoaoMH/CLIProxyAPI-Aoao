@@ -18,9 +18,19 @@ import (
 // It captures request/response details from the gin context and stores them
 // in the database for later analysis.
 type Plugin struct {
-	store   *Store
-	enabled atomic.Bool
+	store            *Store
+	enabled          atomic.Bool
+	tokenIncrementor TokenIncrementor
+	usageIncrementor UsageIncrementor
 }
+
+// TokenIncrementor is a callback function type for incrementing API key token counts.
+// It takes the API key string and input/output token counts.
+type TokenIncrementor func(apiKey string, inputTokens, outputTokens int64)
+
+// UsageIncrementor is a callback function type for incrementing API key usage counts.
+// It takes the API key string to increment its usage count and update last used time.
+type UsageIncrementor func(apiKey string)
 
 var (
 	defaultPlugin     *Plugin
@@ -46,6 +56,16 @@ func NewPlugin(store *Store) *Plugin {
 // SetStore sets the store for the default plugin.
 func SetStore(store *Store) {
 	DefaultPlugin().store = store
+}
+
+// SetTokenIncrementor sets the callback function for incrementing API key token counts.
+func SetTokenIncrementor(fn TokenIncrementor) {
+	DefaultPlugin().tokenIncrementor = fn
+}
+
+// SetUsageIncrementor sets the callback function for incrementing API key usage counts.
+func SetUsageIncrementor(fn UsageIncrementor) {
+	DefaultPlugin().usageIncrementor = fn
 }
 
 // SetEnabled enables or disables the plugin.
@@ -201,6 +221,20 @@ func (p *Plugin) HandleUsage(ctx context.Context, record coreusage.Record) {
 			log.WithError(err).Warn("failed to insert usage record")
 		}
 	}()
+
+	// Increment API key token counts if callback is set
+	if p.tokenIncrementor != nil && record.APIKey != "" {
+		inputTokens := record.Detail.InputTokens
+		outputTokens := record.Detail.OutputTokens
+		if inputTokens > 0 || outputTokens > 0 {
+			p.tokenIncrementor(record.APIKey, inputTokens, outputTokens)
+		}
+	}
+
+	// Increment API key usage count and update last used time
+	if p.usageIncrementor != nil && record.APIKey != "" {
+		p.usageIncrementor(record.APIKey)
+	}
 }
 
 // isSensitiveHeader returns true for headers that should be masked.
