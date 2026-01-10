@@ -552,7 +552,7 @@ func (s *Store) GetActivityHeatmap(ctx context.Context, days int) (*ActivityHeat
 			substr(timestamp, 1, 10) as day,
 			COUNT(*) as requests,
 			COALESCE(SUM(total_tokens), 0) as total_tokens,
-			COALESCE(AVG(duration), 0) as avg_duration,
+			COALESCE(AVG(duration_ms), 0) as avg_duration,
 			COUNT(DISTINCT model) as unique_models
 		FROM usage_records
 		WHERE substr(timestamp, 1, 10) >= ? AND substr(timestamp, 1, 10) <= ?
