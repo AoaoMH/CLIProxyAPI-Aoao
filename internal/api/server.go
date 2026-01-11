@@ -658,6 +658,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage-records/provider-stats", s.mgmt.GetProviderStats)
 		mgmt.GET("/usage-records/summary", s.mgmt.GetUsageSummary)
 		mgmt.GET("/usage-records/timeline", s.mgmt.GetRequestTimeline)
+		mgmt.GET("/usage-records/interval-timeline", s.mgmt.GetIntervalTimeline)
 
 		// Dashboard stats route (unified endpoint for dashboard data)
 		mgmt.GET("/dashboard/stats", s.mgmt.GetDashboardStats)
