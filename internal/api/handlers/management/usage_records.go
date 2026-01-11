@@ -264,3 +264,42 @@ func (h *Handler) GetIntervalTimeline(c *gin.Context) {
 
 	c.JSON(http.StatusOK, result)
 }
+// GetRequestCandidates returns all candidate records for a specific request ID.
+func (h *Handler) GetRequestCandidates(c *gin.Context) {
+	store := usagerecord.DefaultStore()
+	if store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "usage records not available"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	// First get the usage record to find the request_id
+	record, err := store.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if record == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "record not found"})
+		return
+	}
+
+	// Then get candidates by request_id
+	candidates, err := store.GetRequestCandidates(c.Request.Context(), record.RequestID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"request_id": record.RequestID,
+		"candidates": candidates,
+	})
+}

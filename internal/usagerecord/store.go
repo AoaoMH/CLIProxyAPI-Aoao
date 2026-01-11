@@ -188,6 +188,27 @@ func (s *Store) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_usage_records_model ON usage_records(model);
 	CREATE INDEX IF NOT EXISTS idx_usage_records_provider ON usage_records(provider);
 	CREATE INDEX IF NOT EXISTS idx_usage_records_request_id ON usage_records(request_id);
+
+	CREATE TABLE IF NOT EXISTS request_candidates (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		request_id TEXT NOT NULL,
+		timestamp DATETIME NOT NULL,
+		provider TEXT NOT NULL DEFAULT '',
+		api_key TEXT NOT NULL DEFAULT '',
+		api_key_masked TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'pending',
+		status_code INTEGER NOT NULL DEFAULT 0,
+		success INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0,
+		error_message TEXT NOT NULL DEFAULT '',
+		candidate_index INTEGER NOT NULL DEFAULT 0,
+		retry_index INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_request_candidates_request_id ON request_candidates(request_id);
+	CREATE INDEX IF NOT EXISTS idx_request_candidates_timestamp ON request_candidates(timestamp DESC);
+	CREATE INDEX IF NOT EXISTS idx_request_candidates_status ON request_candidates(status);
 	`
 
 	if _, err := s.db.Exec(schema); err != nil {
@@ -1237,4 +1258,121 @@ func (s *Store) GetIntervalTimeline(ctx context.Context, hours int, limit int) (
 		Points:              points,
 		Models:              models,
 	}, nil
+}
+// RequestCandidate represents a request candidate record for tracing request routing.
+type RequestCandidate struct {
+	ID            int64             `json:"id"`
+	RequestID     string            `json:"request_id"`
+	Timestamp     time.Time         `json:"timestamp"`
+	Provider      string            `json:"provider"`
+	APIKey        string            `json:"api_key"`
+	APIKeyMasked  string            `json:"api_key_masked"`
+	Status        string            `json:"status"`        // pending, success, failed, skipped
+	StatusCode    int               `json:"status_code"`
+	Success       bool              `json:"success"`
+	DurationMs    int64             `json:"duration_ms"`
+	ErrorMessage  string            `json:"error_message,omitempty"`
+	CandidateIndex int              `json:"candidate_index"`
+	RetryIndex    int               `json:"retry_index"`
+}
+
+// GetRequestCandidates retrieves all candidate records for a specific request ID.
+func (s *Store) GetRequestCandidates(ctx context.Context, requestID string) ([]RequestCandidate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, fmt.Errorf("store is closed")
+	}
+
+	query := `
+		SELECT id, request_id, timestamp, provider, api_key, api_key_masked,
+			status, status_code, success, duration_ms, error_message,
+			candidate_index, retry_index
+		FROM request_candidates
+		WHERE request_id = ?
+		ORDER BY candidate_index ASC, retry_index ASC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, requestID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query request candidates: %w", err)
+	}
+	defer rows.Close()
+
+	var candidates []RequestCandidate
+	for rows.Next() {
+		var c RequestCandidate
+		var timestamp string
+		var success int
+
+		err := rows.Scan(
+			&c.ID, &c.RequestID, &timestamp, &c.Provider, &c.APIKey, &c.APIKeyMasked,
+			&c.Status, &c.StatusCode, &success, &c.DurationMs, &c.ErrorMessage,
+			&c.CandidateIndex, &c.RetryIndex,
+		)
+		if err != nil {
+			log.WithError(err).Warn("failed to scan request candidate")
+			continue
+		}
+
+		c.Timestamp, _ = time.Parse(time.RFC3339, timestamp)
+		if c.Timestamp.IsZero() {
+			c.Timestamp, _ = time.Parse("2006-01-02 15:04:05", timestamp)
+		}
+		if c.Timestamp.IsZero() {
+			c.Timestamp, _ = time.Parse("2006-01-02T15:04:05Z", timestamp)
+		}
+		c.Success = success == 1
+
+		candidates = append(candidates, c)
+	}
+
+	return candidates, nil
+}
+
+// InsertRequestCandidate adds a new request candidate record.
+func (s *Store) InsertRequestCandidate(ctx context.Context, candidate *RequestCandidate) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return fmt.Errorf("store is closed")
+	}
+
+	query := `
+	INSERT INTO request_candidates (
+		request_id, timestamp, provider, api_key, api_key_masked,
+		status, status_code, success, duration_ms, error_message,
+		candidate_index, retry_index
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	success := 0
+	if candidate.Success {
+		success = 1
+	}
+
+	result, err := s.db.ExecContext(ctx, query,
+		candidate.RequestID,
+		candidate.Timestamp.Format(time.RFC3339),
+		candidate.Provider,
+		candidate.APIKey,
+		candidate.APIKeyMasked,
+		candidate.Status,
+		candidate.StatusCode,
+		success,
+		candidate.DurationMs,
+		candidate.ErrorMessage,
+		candidate.CandidateIndex,
+		candidate.RetryIndex,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert request candidate: %w", err)
+	}
+
+	id, _ := result.LastInsertId()
+	candidate.ID = id
+
+	return nil
 }

@@ -649,6 +649,7 @@ func (s *Server) registerManagementRoutes() {
 		// Usage records routes
 		mgmt.GET("/usage-records", s.mgmt.GetUsageRecords)
 		mgmt.GET("/usage-records/:id", s.mgmt.GetUsageRecordByID)
+		mgmt.GET("/usage-records/:id/candidates", s.mgmt.GetRequestCandidates)
 		mgmt.DELETE("/usage-records", s.mgmt.DeleteOldUsageRecords)
 
 		// Usage analytics routes

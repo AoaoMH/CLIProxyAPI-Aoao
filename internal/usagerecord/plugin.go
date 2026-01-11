@@ -22,6 +22,7 @@ type Plugin struct {
 	enabled          atomic.Bool
 	tokenIncrementor TokenIncrementor
 	usageIncrementor UsageIncrementor
+	candidateIncrementor CandidateIncrementor
 }
 
 // TokenIncrementor is a callback function type for incrementing API key token counts.
@@ -31,6 +32,10 @@ type TokenIncrementor func(apiKey string, inputTokens, outputTokens int64)
 // UsageIncrementor is a callback function type for incrementing API key usage counts.
 // It takes the API key string to increment its usage count and update last used time.
 type UsageIncrementor func(apiKey string)
+
+// CandidateIncrementor is a callback function type for recording request candidates.
+// It takes the request ID, candidate information for tracing request routing.
+type CandidateIncrementor func(requestID string, provider string, apiKey string, status string, statusCode int, success bool, durationMs int64, errorMessage string, candidateIndex int, retryIndex int)
 
 var (
 	defaultPlugin     *Plugin
@@ -66,6 +71,11 @@ func SetTokenIncrementor(fn TokenIncrementor) {
 // SetUsageIncrementor sets the callback function for incrementing API key usage counts.
 func SetUsageIncrementor(fn UsageIncrementor) {
 	DefaultPlugin().usageIncrementor = fn
+}
+
+// SetCandidateIncrementor sets the callback function for recording request candidates.
+func SetCandidateIncrementor(fn CandidateIncrementor) {
+	DefaultPlugin().candidateIncrementor = fn
 }
 
 // SetEnabled enables or disables the plugin.
@@ -276,4 +286,42 @@ func truncateBody(body string, maxLen int) string {
 // Register registers the default plugin with the core usage manager.
 func Register() {
 	coreusage.RegisterPlugin(DefaultPlugin())
+}
+// RecordCandidate records a request candidate for tracing purposes.
+// This should be called during request routing to track all attempts.
+func RecordCandidate(requestID string, provider string, apiKey string, status string, statusCode int, success bool, durationMs int64, errorMessage string, candidateIndex int, retryIndex int) {
+	plugin := DefaultPlugin()
+	if plugin == nil || plugin.store == nil || !plugin.enabled.Load() {
+		return
+	}
+
+	candidate := &RequestCandidate{
+		RequestID:      requestID,
+		Timestamp:      time.Now(),
+		Provider:       provider,
+		APIKey:         apiKey,
+		APIKeyMasked:   MaskAPIKey(apiKey),
+		Status:         status,
+		StatusCode:     statusCode,
+		Success:        success,
+		DurationMs:     durationMs,
+		ErrorMessage:   errorMessage,
+		CandidateIndex: candidateIndex,
+		RetryIndex:     retryIndex,
+	}
+
+	// Insert asynchronously to avoid blocking the request
+	go func() {
+		insertCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := plugin.store.InsertRequestCandidate(insertCtx, candidate); err != nil {
+			log.WithError(err).Warn("failed to insert request candidate")
+		}
+	}()
+
+	// Call the callback if set
+	if plugin.candidateIncrementor != nil {
+		plugin.candidateIncrementor(requestID, provider, apiKey, status, statusCode, success, durationMs, errorMessage, candidateIndex, retryIndex)
+	}
 }
