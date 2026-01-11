@@ -240,7 +240,7 @@ func (s *Store) Insert(ctx context.Context, record *Record) error {
 
 	result, err := s.db.ExecContext(ctx, query,
 		record.RequestID,
-		record.Timestamp,
+		record.Timestamp.Format(time.RFC3339),
 		record.IP,
 		record.APIKey,
 		record.APIKeyMasked,
@@ -1090,5 +1090,135 @@ func (s *Store) GetRequestTimeline(ctx context.Context, startTime, endTime strin
 		TotalHours:  len(points),
 		MaxRequests: maxRequests,
 		Points:      points,
+	}, nil
+}
+
+// IntervalTimelinePoint represents a single point in the interval timeline scatter chart.
+type IntervalTimelinePoint struct {
+	X     string  `json:"x"`     // ISO timestamp
+	Y     float64 `json:"y"`     // Interval in minutes
+	Model string  `json:"model"` // Model name for color coding
+}
+
+// IntervalTimelineResult contains the interval timeline data for scatter chart visualization.
+type IntervalTimelineResult struct {
+	AnalysisPeriodHours int                     `json:"analysis_period_hours"`
+	TotalPoints         int                     `json:"total_points"`
+	Points              []IntervalTimelinePoint `json:"points"`
+	Models              []string                `json:"models,omitempty"` // List of unique models
+}
+
+// GetIntervalTimeline returns request interval data for scatter chart visualization.
+// It calculates the time interval between consecutive requests.
+func (s *Store) GetIntervalTimeline(ctx context.Context, hours int, limit int) (*IntervalTimelineResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, fmt.Errorf("store is closed")
+	}
+
+	if hours < 1 {
+		hours = 24
+	}
+	if hours > 720 {
+		hours = 720
+	}
+	if limit < 1 {
+		limit = 5000
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
+
+	startTime := time.Now().Add(-time.Duration(hours) * time.Hour)
+
+	// Query all records in the time range, ordered by timestamp
+	query := `
+		SELECT timestamp, model
+		FROM usage_records
+		WHERE timestamp >= ? AND success = 1
+		ORDER BY timestamp ASC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, startTime.Format(time.RFC3339))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query interval timeline: %w", err)
+	}
+	defer rows.Close()
+
+	type recordData struct {
+		timestamp time.Time
+		model     string
+	}
+
+	var records []recordData
+	for rows.Next() {
+		var timestampStr, model string
+		if err := rows.Scan(&timestampStr, &model); err != nil {
+			continue
+		}
+
+		ts, _ := time.Parse(time.RFC3339, timestampStr)
+		if ts.IsZero() {
+			ts, _ = time.Parse("2006-01-02 15:04:05", timestampStr)
+		}
+		if ts.IsZero() {
+			ts, _ = time.Parse("2006-01-02T15:04:05Z", timestampStr)
+		}
+		if ts.IsZero() {
+			continue
+		}
+
+		records = append(records, recordData{timestamp: ts, model: model})
+	}
+
+	// Calculate intervals between consecutive requests
+	var points []IntervalTimelinePoint
+	modelsSet := make(map[string]bool)
+
+	for i := 1; i < len(records); i++ {
+		interval := records[i].timestamp.Sub(records[i-1].timestamp).Minutes()
+
+		// Only include intervals <= 120 minutes (2 hours)
+		if interval > 120 {
+			continue
+		}
+
+		points = append(points, IntervalTimelinePoint{
+			X:     records[i].timestamp.Format(time.RFC3339),
+			Y:     float64(int(interval*100)) / 100, // Round to 2 decimal places
+			Model: records[i].model,
+		})
+
+		if records[i].model != "" {
+			modelsSet[records[i].model] = true
+		}
+	}
+
+	// Apply limit if needed (sample evenly)
+	if len(points) > limit {
+		step := float64(len(points)) / float64(limit)
+		sampled := make([]IntervalTimelinePoint, 0, limit)
+		for i := 0; i < limit; i++ {
+			idx := int(float64(i) * step)
+			if idx < len(points) {
+				sampled = append(sampled, points[idx])
+			}
+		}
+		points = sampled
+	}
+
+	// Convert models set to slice
+	var models []string
+	for model := range modelsSet {
+		models = append(models, model)
+	}
+
+	return &IntervalTimelineResult{
+		AnalysisPeriodHours: hours,
+		TotalPoints:         len(points),
+		Points:              points,
+		Models:              models,
 	}, nil
 }

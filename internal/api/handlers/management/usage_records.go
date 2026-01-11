@@ -235,3 +235,32 @@ func (h *Handler) GetUsageSummary(c *gin.Context) {
 
 	c.JSON(http.StatusOK, result)
 }
+
+// GetIntervalTimeline returns request interval data for scatter chart visualization.
+func (h *Handler) GetIntervalTimeline(c *gin.Context) {
+	store := usagerecord.DefaultStore()
+	if store == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "usage records not available"})
+		return
+	}
+
+	hoursStr := c.DefaultQuery("hours", "24")
+	hours, err := strconv.Atoi(hoursStr)
+	if err != nil || hours < 1 {
+		hours = 24
+	}
+
+	limitStr := c.DefaultQuery("limit", "5000")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit < 1 {
+		limit = 5000
+	}
+
+	result, err := store.GetIntervalTimeline(c.Request.Context(), hours, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
