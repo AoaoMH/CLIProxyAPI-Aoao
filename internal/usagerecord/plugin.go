@@ -171,15 +171,15 @@ func (p *Plugin) HandleUsage(ctx context.Context, record coreusage.Record) {
 				durationMs = time.Since(record.RequestedAt).Milliseconds()
 			}
 
-			// Get cached request/response bodies if available
+			// Get cached request/response bodies if available (完整存储，不截断)
 			if body, exists := ginCtx.Get("request_body_for_log"); exists {
 				if bodyBytes, ok := body.([]byte); ok {
-					requestBody = truncateBody(string(bodyBytes), 50000)
+					requestBody = string(bodyBytes) // 完整存储，不截断
 				}
 			}
 			if body, exists := ginCtx.Get("response_body_for_log"); exists {
 				if bodyBytes, ok := body.([]byte); ok {
-					responseBody = truncateBody(string(bodyBytes), 50000)
+					responseBody = string(bodyBytes) // 完整存储，不截断
 				}
 			}
 		}

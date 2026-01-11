@@ -459,7 +459,8 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 	selectQuery := fmt.Sprintf(`
 		SELECT id, request_id, timestamp, ip, api_key, api_key_masked, model, provider,
 			is_streaming, input_tokens, output_tokens, total_tokens,
-			duration_ms, status_code, success, request_url, request_method
+			duration_ms, status_code, success, request_url, request_method,
+			request_headers, request_body, response_headers, response_body
 		FROM usage_records %s
 		ORDER BY %s %s
 		LIMIT ? OFFSET ?
@@ -477,12 +478,14 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 		var r Record
 		var isStreaming, success int
 		var timestamp string
+		var reqHeadersJSON, respHeadersJSON string
 
 		err := rows.Scan(
 			&r.ID, &r.RequestID, &timestamp, &r.IP, &r.APIKey, &r.APIKeyMasked,
 			&r.Model, &r.Provider, &isStreaming, &r.InputTokens,
 			&r.OutputTokens, &r.TotalTokens, &r.DurationMs, &r.StatusCode,
 			&success, &r.RequestURL, &r.RequestMethod,
+			&reqHeadersJSON, &r.RequestBody, &respHeadersJSON, &r.ResponseBody,
 		)
 		if err != nil {
 			log.WithError(err).Warn("failed to scan record")
@@ -498,6 +501,14 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 		}
 		r.IsStreaming = isStreaming == 1
 		r.Success = success == 1
+
+		// Parse headers JSON
+		if err := json.Unmarshal([]byte(reqHeadersJSON), &r.RequestHeaders); err != nil {
+			r.RequestHeaders = make(map[string]string)
+		}
+		if err := json.Unmarshal([]byte(respHeadersJSON), &r.ResponseHeaders); err != nil {
+			r.ResponseHeaders = make(map[string]string)
+		}
 
 		records = append(records, r)
 	}
