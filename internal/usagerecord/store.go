@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,85 @@ import (
 
 	log "github.com/sirupsen/logrus"
 )
+
+// ParseTimeParam converts a time parameter to RFC3339 format for database comparison.
+// It accepts:
+// - Unix timestamp as string (e.g., "1736582400") - converts to local RFC3339
+// - ISO 8601 / RFC3339 string (e.g., "2026-01-11T12:00:00.000Z") - converts to local RFC3339
+// - Empty string - returns empty string (no filter)
+func ParseTimeParam(param string) string {
+	if param == "" {
+		return ""
+	}
+
+	// Try parsing as Unix timestamp (seconds)
+	if ts, err := strconv.ParseInt(param, 10, 64); err == nil && ts > 1000000000 && ts < 9999999999 {
+		// Valid Unix timestamp (between ~2001 and ~2286)
+		return time.Unix(ts, 0).Format(time.RFC3339)
+	}
+
+	// Try parsing as RFC3339 (with timezone)
+	if t, err := time.Parse(time.RFC3339, param); err == nil {
+		return t.Local().Format(time.RFC3339)
+	}
+
+	// Try parsing as RFC3339Nano (with nanoseconds and timezone)
+	if t, err := time.Parse(time.RFC3339Nano, param); err == nil {
+		return t.Local().Format(time.RFC3339)
+	}
+
+	// Try parsing as ISO 8601 with milliseconds (JavaScript toISOString format)
+	// Format: 2026-01-11T12:00:00.000Z
+	if t, err := time.Parse("2006-01-02T15:04:05.000Z", param); err == nil {
+		return t.Local().Format(time.RFC3339)
+	}
+
+	// Try parsing as ISO 8601 without milliseconds
+	if t, err := time.Parse("2006-01-02T15:04:05Z", param); err == nil {
+		return t.Local().Format(time.RFC3339)
+	}
+
+	// If all parsing fails, return the original string (backward compatibility)
+	return param
+}
+
+// ParseTimeParamToTime converts a time parameter to time.Time for Go operations.
+// It accepts:
+// - Unix timestamp as string (e.g., "1736582400") - converts to time.Time
+// - ISO 8601 / RFC3339 string (e.g., "2026-01-11T12:00:00.000Z") - converts to local time.Time
+// - Empty string - returns zero time
+func ParseTimeParamToTime(param string) time.Time {
+	if param == "" {
+		return time.Time{}
+	}
+
+	// Try parsing as Unix timestamp (seconds)
+	if ts, err := strconv.ParseInt(param, 10, 64); err == nil && ts > 1000000000 && ts < 9999999999 {
+		return time.Unix(ts, 0)
+	}
+
+	// Try parsing as RFC3339 (with timezone)
+	if t, err := time.Parse(time.RFC3339, param); err == nil {
+		return t.Local()
+	}
+
+	// Try parsing as RFC3339Nano (with nanoseconds and timezone)
+	if t, err := time.Parse(time.RFC3339Nano, param); err == nil {
+		return t.Local()
+	}
+
+	// Try parsing as ISO 8601 with milliseconds (JavaScript toISOString format)
+	if t, err := time.Parse("2006-01-02T15:04:05.000Z", param); err == nil {
+		return t.Local()
+	}
+
+	// Try parsing as ISO 8601 without milliseconds
+	if t, err := time.Parse("2006-01-02T15:04:05Z", param); err == nil {
+		return t.Local()
+	}
+
+	return time.Time{}
+}
 
 // Record represents a single API usage record stored in the database.
 type Record struct {
@@ -329,11 +409,11 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 	}
 	if query.StartTime != "" {
 		conditions = append(conditions, "timestamp >= ?")
-		args = append(args, query.StartTime)
+		args = append(args, ParseTimeParam(query.StartTime))
 	}
 	if query.EndTime != "" {
 		conditions = append(conditions, "timestamp <= ?")
-		args = append(args, query.EndTime)
+		args = append(args, ParseTimeParam(query.EndTime))
 	}
 	if query.Success != nil {
 		if *query.Success {
@@ -662,11 +742,11 @@ func (s *Store) GetModelStats(ctx context.Context, startTime, endTime string) (*
 
 	if startTime != "" {
 		conditions = append(conditions, "timestamp >= ?")
-		args = append(args, startTime)
+		args = append(args, ParseTimeParam(startTime))
 	}
 	if endTime != "" {
 		conditions = append(conditions, "timestamp <= ?")
-		args = append(args, endTime)
+		args = append(args, ParseTimeParam(endTime))
 	}
 
 	whereClause := ""
@@ -751,11 +831,11 @@ func (s *Store) GetDistinctOptions(ctx context.Context, startTime, endTime strin
 
 	if startTime != "" {
 		conditions = append(conditions, "timestamp >= ?")
-		args = append(args, startTime)
+		args = append(args, ParseTimeParam(startTime))
 	}
 	if endTime != "" {
 		conditions = append(conditions, "timestamp <= ?")
-		args = append(args, endTime)
+		args = append(args, ParseTimeParam(endTime))
 	}
 
 	whereClause := ""
@@ -814,11 +894,11 @@ func (s *Store) GetProviderStats(ctx context.Context, startTime, endTime string)
 
 	if startTime != "" {
 		conditions = append(conditions, "timestamp >= ?")
-		args = append(args, startTime)
+		args = append(args, ParseTimeParam(startTime))
 	}
 	if endTime != "" {
 		conditions = append(conditions, "timestamp <= ?")
-		args = append(args, endTime)
+		args = append(args, ParseTimeParam(endTime))
 	}
 
 	whereClause := ""
@@ -893,11 +973,11 @@ func (s *Store) GetUsageSummary(ctx context.Context, startTime, endTime string) 
 
 	if startTime != "" {
 		conditions = append(conditions, "timestamp >= ?")
-		args = append(args, startTime)
+		args = append(args, ParseTimeParam(startTime))
 	}
 	if endTime != "" {
 		conditions = append(conditions, "timestamp <= ?")
-		args = append(args, endTime)
+		args = append(args, ParseTimeParam(endTime))
 	}
 
 	whereClause := ""
@@ -1019,11 +1099,11 @@ func (s *Store) GetRequestTimeline(ctx context.Context, startTime, endTime strin
 
 	if startTime != "" {
 		conditions = append(conditions, "timestamp >= ?")
-		args = append(args, startTime)
+		args = append(args, ParseTimeParam(startTime))
 	}
 	if endTime != "" {
 		conditions = append(conditions, "timestamp <= ?")
-		args = append(args, endTime)
+		args = append(args, ParseTimeParam(endTime))
 	}
 
 	whereClause := ""
@@ -1072,16 +1152,22 @@ func (s *Store) GetRequestTimeline(ctx context.Context, startTime, endTime strin
 
 	// Build complete hourly timeline
 	var startDate, endDate time.Time
-	now := time.Now().UTC()
+	now := time.Now()
 
 	if startTime != "" {
-		startDate, _ = time.Parse(time.RFC3339, startTime)
+		startDate = ParseTimeParamToTime(startTime)
+		if startDate.IsZero() {
+			startDate = now.Add(-24 * time.Hour)
+		}
 	} else {
 		// Default to last 24 hours
 		startDate = now.Add(-24 * time.Hour)
 	}
 	if endTime != "" {
-		endDate, _ = time.Parse(time.RFC3339, endTime)
+		endDate = ParseTimeParamToTime(endTime)
+		if endDate.IsZero() {
+			endDate = now
+		}
 	} else {
 		endDate = now
 	}
@@ -1155,9 +1241,9 @@ func (s *Store) GetIntervalTimeline(ctx context.Context, hours int, limit int) (
 	startTime := time.Now().Add(-time.Duration(hours) * time.Hour)
 
 	// Debug: log the time range being queried
-	fmt.Printf("GetIntervalTimeline: querying from %s to %s (hours=%d)\n", 
-		startTime.Format(time.RFC3339), 
-		time.Now().Format(time.RFC3339), 
+	fmt.Printf("GetIntervalTimeline: querying from %s to %s (hours=%d)\n",
+		startTime.Format(time.RFC3339),
+		time.Now().Format(time.RFC3339),
 		hours)
 
 	// Query all records in the time range, ordered by timestamp
@@ -1247,7 +1333,7 @@ func (s *Store) GetIntervalTimeline(ctx context.Context, hours int, limit int) (
 	// Debug: log the results
 	fmt.Printf("GetIntervalTimeline: found %d records, generated %d points\n", len(records), len(points))
 	if len(records) > 0 {
-		fmt.Printf("GetIntervalTimeline: first record at %s, last record at %s\n", 
+		fmt.Printf("GetIntervalTimeline: first record at %s, last record at %s\n",
 			records[0].timestamp.Format(time.RFC3339),
 			records[len(records)-1].timestamp.Format(time.RFC3339))
 	}
@@ -1262,19 +1348,19 @@ func (s *Store) GetIntervalTimeline(ctx context.Context, hours int, limit int) (
 
 // RequestCandidate represents a request candidate record for tracing request routing.
 type RequestCandidate struct {
-	ID            int64             `json:"id"`
-	RequestID     string            `json:"request_id"`
-	Timestamp     time.Time         `json:"timestamp"`
-	Provider      string            `json:"provider"`
-	APIKey        string            `json:"api_key"`
-	APIKeyMasked  string            `json:"api_key_masked"`
-	Status        string            `json:"status"`        // pending, success, failed, skipped
-	StatusCode    int               `json:"status_code"`
-	Success       bool              `json:"success"`
-	DurationMs    int64             `json:"duration_ms"`
-	ErrorMessage  string            `json:"error_message,omitempty"`
-	CandidateIndex int              `json:"candidate_index"`
-	RetryIndex    int               `json:"retry_index"`
+	ID             int64     `json:"id"`
+	RequestID      string    `json:"request_id"`
+	Timestamp      time.Time `json:"timestamp"`
+	Provider       string    `json:"provider"`
+	APIKey         string    `json:"api_key"`
+	APIKeyMasked   string    `json:"api_key_masked"`
+	Status         string    `json:"status"` // pending, success, failed, skipped
+	StatusCode     int       `json:"status_code"`
+	Success        bool      `json:"success"`
+	DurationMs     int64     `json:"duration_ms"`
+	ErrorMessage   string    `json:"error_message,omitempty"`
+	CandidateIndex int       `json:"candidate_index"`
+	RetryIndex     int       `json:"retry_index"`
 }
 
 // GetRequestCandidates retrieves all candidate records for a specific request ID.
