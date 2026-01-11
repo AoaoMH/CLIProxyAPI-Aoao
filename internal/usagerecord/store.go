@@ -1133,6 +1133,12 @@ func (s *Store) GetIntervalTimeline(ctx context.Context, hours int, limit int) (
 
 	startTime := time.Now().Add(-time.Duration(hours) * time.Hour)
 
+	// Debug: log the time range being queried
+	fmt.Printf("GetIntervalTimeline: querying from %s to %s (hours=%d)\n", 
+		startTime.Format(time.RFC3339), 
+		time.Now().Format(time.RFC3339), 
+		hours)
+
 	// Query all records in the time range, ordered by timestamp
 	query := `
 		SELECT timestamp, model
@@ -1140,6 +1146,8 @@ func (s *Store) GetIntervalTimeline(ctx context.Context, hours int, limit int) (
 		WHERE timestamp >= ? AND success = 1
 		ORDER BY timestamp ASC
 	`
+
+	fmt.Printf("GetIntervalTimeline: executing query with startTime=%s\n", startTime.Format(time.RFC3339))
 
 	rows, err := s.db.QueryContext(ctx, query, startTime.Format(time.RFC3339))
 	if err != nil {
@@ -1213,6 +1221,14 @@ func (s *Store) GetIntervalTimeline(ctx context.Context, hours int, limit int) (
 	var models []string
 	for model := range modelsSet {
 		models = append(models, model)
+	}
+
+	// Debug: log the results
+	fmt.Printf("GetIntervalTimeline: found %d records, generated %d points\n", len(records), len(points))
+	if len(records) > 0 {
+		fmt.Printf("GetIntervalTimeline: first record at %s, last record at %s\n", 
+			records[0].timestamp.Format(time.RFC3339),
+			records[len(records)-1].timestamp.Format(time.RFC3339))
 	}
 
 	return &IntervalTimelineResult{
