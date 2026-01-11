@@ -1259,6 +1259,7 @@ func (s *Store) GetIntervalTimeline(ctx context.Context, hours int, limit int) (
 		Models:              models,
 	}, nil
 }
+
 // RequestCandidate represents a request candidate record for tracing request routing.
 type RequestCandidate struct {
 	ID            int64             `json:"id"`
