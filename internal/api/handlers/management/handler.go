@@ -3,6 +3,7 @@
 package management
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -126,6 +128,40 @@ func (h *Handler) SetLogDirectory(dir string) {
 		}
 	}
 	h.logDir = dir
+}
+
+// UpdateWebUI handles WebUI update requests
+func (h *Handler) UpdateWebUI(c *gin.Context) {
+	var body struct {
+		Version string `json:"version"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	if strings.TrimSpace(body.Version) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "version is required"})
+		return
+	}
+
+	// Force update the management asset to the specified version
+	staticDir := managementasset.StaticDir(h.configFilePath)
+	if staticDir == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "static directory not configured"})
+		return
+	}
+
+	// Trigger immediate update
+	go func() {
+		ctx := context.Background()
+		managementasset.EnsureLatestManagementHTML(ctx, staticDir, h.cfg.ProxyURL, h.cfg.RemoteManagement.PanelGitHubRepository)
+	}()
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "ok",
+		"message": fmt.Sprintf("WebUI update to version %s initiated", body.Version),
+	})
 }
 
 // Middleware enforces access control for management endpoints.
