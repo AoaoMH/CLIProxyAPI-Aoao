@@ -238,7 +238,7 @@ func CreateBackup(opts BackupOptions) (string, error) {
 	// Generate backup filename
 	backupName := opts.Name
 	if backupName == "" {
-		backupName = fmt.Sprintf("cliProxyApi_backup_%s.zip", time.Now().Format("20060102_150405"))
+		backupName = fmt.Sprintf("CLIProxyAPI-backup-%s.zip", time.Now().Format("20060102-150405"))
 	}
 	if !strings.HasSuffix(backupName, ".zip") {
 		backupName += ".zip"
