@@ -3,7 +3,6 @@
 package management
 
 import (
-	"context"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -140,27 +139,31 @@ func (h *Handler) UpdateWebUI(c *gin.Context) {
 		return
 	}
 
-	if strings.TrimSpace(body.Version) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "version is required"})
-		return
-	}
+	// version parameter is accepted but currently we always fetch the latest release
+	_ = body.Version
 
-	// Force update the management asset to the specified version
+	// Force update the management asset
 	staticDir := managementasset.StaticDir(h.configFilePath)
 	if staticDir == "" {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "static directory not configured"})
 		return
 	}
 
-	// Trigger immediate update
-	go func() {
-		ctx := context.Background()
-		managementasset.EnsureLatestManagementHTML(ctx, staticDir, h.cfg.ProxyURL, h.cfg.RemoteManagement.PanelGitHubRepository)
-	}()
+	// Use ForceUpdateManagementHTML for immediate, guaranteed update
+	ctx := c.Request.Context()
+	newHash, err := managementasset.ForceUpdateManagementHTML(ctx, staticDir, h.cfg.ProxyURL, h.cfg.RemoteManagement.PanelGitHubRepository)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":  fmt.Sprintf("WebUI update failed: %v", err),
+			"status": "error",
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "ok",
-		"message": fmt.Sprintf("WebUI update to version %s initiated", body.Version),
+		"message": "WebUI updated successfully",
+		"hash":    newHash,
 	})
 }
 
