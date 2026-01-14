@@ -280,6 +280,63 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 	log.Infof("management asset updated successfully (hash=%s)", downloadedHash)
 }
 
+// ForceUpdateManagementHTML forces an immediate update of the management asset,
+// bypassing the rate limit and hash comparison. Returns the new hash and any error encountered.
+func ForceUpdateManagementHTML(ctx context.Context, staticDir string, proxyURL string, panelRepository string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	staticDir = strings.TrimSpace(staticDir)
+	if staticDir == "" {
+		return "", fmt.Errorf("empty static directory")
+	}
+
+	localPath := filepath.Join(staticDir, managementAssetName)
+
+	if errMkdirAll := os.MkdirAll(staticDir, 0o755); errMkdirAll != nil {
+		return "", fmt.Errorf("failed to prepare static directory: %w", errMkdirAll)
+	}
+
+	releaseURL := resolveReleaseURL(panelRepository)
+	client := newHTTPClient(proxyURL)
+
+	asset, remoteHash, err := fetchLatestAsset(ctx, client, releaseURL)
+	if err != nil {
+		// Try fallback page
+		data, downloadedHash, fallbackErr := downloadAsset(ctx, client, defaultManagementFallbackURL)
+		if fallbackErr != nil {
+			return "", fmt.Errorf("failed to fetch release info and fallback: %w (fallback: %v)", err, fallbackErr)
+		}
+		if writeErr := atomicWriteFile(localPath, data); writeErr != nil {
+			return "", fmt.Errorf("failed to write fallback asset: %w", writeErr)
+		}
+		log.Infof("management asset force-updated from fallback (hash=%s)", downloadedHash)
+		return downloadedHash, nil
+	}
+
+	data, downloadedHash, err := downloadAsset(ctx, client, asset.BrowserDownloadURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to download management asset: %w", err)
+	}
+
+	if remoteHash != "" && !strings.EqualFold(remoteHash, downloadedHash) {
+		log.Warnf("remote digest mismatch for management asset: expected %s got %s", remoteHash, downloadedHash)
+	}
+
+	if err = atomicWriteFile(localPath, data); err != nil {
+		return "", fmt.Errorf("failed to update management asset on disk: %w", err)
+	}
+
+	// Update the last check time to prevent immediate re-check by auto-updater
+	lastUpdateCheckMu.Lock()
+	lastUpdateCheckTime = time.Now()
+	lastUpdateCheckMu.Unlock()
+
+	log.Infof("management asset force-updated successfully (hash=%s)", downloadedHash)
+	return downloadedHash, nil
+}
+
 func ensureFallbackManagementHTML(ctx context.Context, client *http.Client, localPath string) bool {
 	data, downloadedHash, err := downloadAsset(ctx, client, defaultManagementFallbackURL)
 	if err != nil {
