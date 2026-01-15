@@ -72,9 +72,12 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (str
 		if errMarshal != nil {
 			return "", fmt.Errorf("auth filestore: marshal metadata failed: %w", errMarshal)
 		}
-		if _, errRead := os.ReadFile(path); errRead == nil {
+		if existing, errRead := os.ReadFile(path); errRead == nil {
 			// Use metadataEqualIgnoringTimestamps to skip writes when only timestamp fields change.
 			// This prevents the token refresh loop caused by timestamp/expired/expires_in changes.
+			if metadataEqualIgnoringTimestamps(existing, raw) {
+				return path, nil
+			}
 			file, errOpen := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
 			if errOpen != nil {
 				return "", fmt.Errorf("auth filestore: open existing failed: %w", errOpen)
@@ -197,13 +200,9 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 			if accessToken != "" {
 				fetchedProjectID, errFetch := FetchAntigravityProjectID(context.Background(), accessToken, http.DefaultClient)
 				if errFetch == nil && strings.TrimSpace(fetchedProjectID) != "" {
+					// Only update in-memory metadata; do NOT write to file here.
+					// Writing during read would trigger fsnotify and cause infinite loop.
 					metadata["project_id"] = strings.TrimSpace(fetchedProjectID)
-					if raw, errMarshal := json.Marshal(metadata); errMarshal == nil {
-						if file, errOpen := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600); errOpen == nil {
-							_, _ = file.Write(raw)
-							_ = file.Close()
-						}
-					}
 				}
 			}
 		}
@@ -294,4 +293,80 @@ func (s *FileTokenStore) baseDirSnapshot() string {
 	s.dirLock.RLock()
 	defer s.dirLock.RUnlock()
 	return s.baseDir
+}
+
+// metadataEqualIgnoringTimestamps compares two metadata JSON blobs,
+// ignoring fields that change on every refresh but don't affect functionality.
+// This prevents unnecessary file writes that would trigger watcher events and
+// create refresh loops.
+func metadataEqualIgnoringTimestamps(a, b []byte) bool {
+	var objA, objB map[string]any
+	if err := json.Unmarshal(a, &objA); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &objB); err != nil {
+		return false
+	}
+
+	// Fields to ignore: these change on every refresh but don't affect authentication logic.
+	// - timestamp, expired, expires_in, last_refresh: time-related fields that change on refresh
+	// - access_token: Google OAuth returns a new access_token on each refresh, this is expected
+	//   and shouldn't trigger file writes (the new token will be fetched again when needed)
+	ignoredFields := []string{"timestamp", "expired", "expires_in", "last_refresh", "access_token"}
+	for _, field := range ignoredFields {
+		delete(objA, field)
+		delete(objB, field)
+	}
+
+	return deepEqualJSON(objA, objB)
+}
+
+func deepEqualJSON(a, b any) bool {
+	switch valA := a.(type) {
+	case map[string]any:
+		valB, ok := b.(map[string]any)
+		if !ok || len(valA) != len(valB) {
+			return false
+		}
+		for key, subA := range valA {
+			subB, ok1 := valB[key]
+			if !ok1 || !deepEqualJSON(subA, subB) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		sliceB, ok := b.([]any)
+		if !ok || len(valA) != len(sliceB) {
+			return false
+		}
+		for i := range valA {
+			if !deepEqualJSON(valA[i], sliceB[i]) {
+				return false
+			}
+		}
+		return true
+	case float64:
+		valB, ok := b.(float64)
+		if !ok {
+			return false
+		}
+		return valA == valB
+	case string:
+		valB, ok := b.(string)
+		if !ok {
+			return false
+		}
+		return valA == valB
+	case bool:
+		valB, ok := b.(bool)
+		if !ok {
+			return false
+		}
+		return valA == valB
+	case nil:
+		return b == nil
+	default:
+		return false
+	}
 }
