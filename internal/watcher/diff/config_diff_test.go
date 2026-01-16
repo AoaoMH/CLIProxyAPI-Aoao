@@ -233,7 +233,7 @@ func TestBuildConfigChangeDetails_FlagsAndKeys(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog:                 false,
 			ProxyURL:                   "http://old-proxy",
-			APIKeys:                    []string{"key-1"},
+			APIKeys:                    []config.ApiKeyEntry{{Key: "key-1", IsActive: true}},
 			ForceModelPrefix:           false,
 			NonStreamKeepAliveInterval: 0,
 		},
@@ -270,7 +270,7 @@ func TestBuildConfigChangeDetails_FlagsAndKeys(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog:                 true,
 			ProxyURL:                   "http://new-proxy",
-			APIKeys:                    []string{" key-1 ", "key-2"},
+			APIKeys:                    []config.ApiKeyEntry{{Key: " key-1 ", IsActive: true}, {Key: "key-2", IsActive: true}},
 			ForceModelPrefix:           true,
 			NonStreamKeepAliveInterval: 5,
 		},
