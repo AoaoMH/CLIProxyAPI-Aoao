@@ -1863,15 +1863,15 @@ func (h *Handler) RequestIFlowCookieToken(c *gin.Context) {
 		return
 	}
 
+	var overwriteFileName string
+
 	// Check for duplicate BXAuth before authentication
 	bxAuth := iflowauth.ExtractBXAuth(cookieValue)
 	if existingFile, err := iflowauth.CheckDuplicateBXAuth(h.cfg.AuthDir, bxAuth); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to check duplicate"})
 		return
 	} else if existingFile != "" {
-		existingFileName := filepath.Base(existingFile)
-		c.JSON(http.StatusConflict, gin.H{"status": "error", "error": "duplicate BXAuth found", "existing_file": existingFileName})
-		return
+		overwriteFileName = filepath.Base(existingFile)
 	}
 
 	authSvc := iflowauth.NewIFlowAuth(h.cfg)
@@ -1890,18 +1890,22 @@ func (h *Handler) RequestIFlowCookieToken(c *gin.Context) {
 		return
 	}
 
-	fileName := iflowauth.SanitizeIFlowFileName(email)
+	tokenStorage.Email = email
+
+	fileName := strings.TrimSpace(overwriteFileName)
+	replaced := fileName != ""
 	if fileName == "" {
-		fileName = fmt.Sprintf("iflow-%d", time.Now().UnixMilli())
+		sanitized := iflowauth.SanitizeIFlowFileName(email)
+		if sanitized == "" {
+			sanitized = fmt.Sprintf("iflow-%d", time.Now().UnixMilli())
+		}
+		fileName = fmt.Sprintf("iflow-%s-%d.json", sanitized, time.Now().Unix())
 	}
 
-	tokenStorage.Email = email
-	timestamp := time.Now().Unix()
-
 	record := &coreauth.Auth{
-		ID:       fmt.Sprintf("iflow-%s-%d.json", fileName, timestamp),
+		ID:       fileName,
 		Provider: "iflow",
-		FileName: fmt.Sprintf("iflow-%s-%d.json", fileName, timestamp),
+		FileName: fileName,
 		Storage:  tokenStorage,
 		Metadata: map[string]any{
 			"email":        email,
@@ -1929,6 +1933,7 @@ func (h *Handler) RequestIFlowCookieToken(c *gin.Context) {
 		"email":      email,
 		"expired":    tokenStorage.Expire,
 		"type":       tokenStorage.Type,
+		"replaced":   replaced,
 	})
 }
 
