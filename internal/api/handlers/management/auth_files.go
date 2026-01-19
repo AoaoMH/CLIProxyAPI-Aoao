@@ -1895,12 +1895,7 @@ func (h *Handler) RequestIFlowCookieToken(c *gin.Context) {
 	fileName := strings.TrimSpace(overwriteFileName)
 	replaced := fileName != ""
 	if fileName == "" {
-		now := time.Now()
-		sanitized := iflowauth.SanitizeIFlowFileName(email)
-		if sanitized == "" {
-			sanitized = fmt.Sprintf("%d", now.UnixMilli())
-		}
-		fileName = fmt.Sprintf("iflow-%s-%d.json", sanitized, now.Unix())
+		fileName = fmt.Sprintf("iflow-%d.json", time.Now().UnixMilli())
 	}
 
 	record := &coreauth.Auth{
