@@ -1703,7 +1703,7 @@ func (h *Handler) RequestQwenToken(c *gin.Context) {
 		// Create token storage
 		tokenStorage := qwenAuth.CreateTokenStorage(tokenData)
 
-		tokenStorage.Email = fmt.Sprintf("qwen-%d", time.Now().UnixMilli())
+		tokenStorage.Email = fmt.Sprintf("%d", time.Now().UnixMilli())
 		record := &coreauth.Auth{
 			ID:       fmt.Sprintf("qwen-%s.json", tokenStorage.Email),
 			Provider: "qwen",
@@ -1808,7 +1808,7 @@ func (h *Handler) RequestIFlowToken(c *gin.Context) {
 		tokenStorage := authSvc.CreateTokenStorage(tokenData)
 		identifier := strings.TrimSpace(tokenStorage.Email)
 		if identifier == "" {
-			identifier = fmt.Sprintf("iflow-%d", time.Now().UnixMilli())
+			identifier = fmt.Sprintf("%d", time.Now().UnixMilli())
 			tokenStorage.Email = identifier
 		}
 		record := &coreauth.Auth{
@@ -1895,11 +1895,12 @@ func (h *Handler) RequestIFlowCookieToken(c *gin.Context) {
 	fileName := strings.TrimSpace(overwriteFileName)
 	replaced := fileName != ""
 	if fileName == "" {
+		now := time.Now()
 		sanitized := iflowauth.SanitizeIFlowFileName(email)
 		if sanitized == "" {
-			sanitized = fmt.Sprintf("iflow-%d", time.Now().UnixMilli())
+			sanitized = fmt.Sprintf("%d", now.UnixMilli())
 		}
-		fileName = fmt.Sprintf("iflow-%s-%d.json", sanitized, time.Now().Unix())
+		fileName = fmt.Sprintf("iflow-%s-%d.json", sanitized, now.Unix())
 	}
 
 	record := &coreauth.Auth{
