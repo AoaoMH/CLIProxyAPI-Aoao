@@ -58,7 +58,8 @@ func StatisticsEnabled() bool { return statisticsEnabled.Load() }
 
 // RequestStatistics maintains aggregated request metrics in memory.
 type RequestStatistics struct {
-	mu sync.RWMutex
+	mu    sync.RWMutex
+	dirty atomic.Bool
 
 	totalRequests int64
 	successCount  int64
@@ -91,6 +92,7 @@ type modelStats struct {
 type RequestDetail struct {
 	Timestamp time.Time  `json:"timestamp"`
 	Source    string     `json:"source"`
+	AuthID    string     `json:"auth_id,omitempty"`
 	AuthIndex string     `json:"auth_index"`
 	Tokens    TokenStats `json:"tokens"`
 	Failed    bool       `json:"failed"`
@@ -150,6 +152,140 @@ func NewRequestStatistics() *RequestStatistics {
 	}
 }
 
+// Reset clears all aggregated usage data.
+func (s *RequestStatistics) Reset() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.totalRequests = 0
+	s.successCount = 0
+	s.failureCount = 0
+	s.totalTokens = 0
+	s.apis = make(map[string]*apiStats)
+	s.requestsByDay = make(map[string]int64)
+	s.requestsByHour = make(map[int]int64)
+	s.tokensByDay = make(map[string]int64)
+	s.tokensByHour = make(map[int]int64)
+	s.mu.Unlock()
+	s.dirty.Store(false)
+}
+
+// PruneBefore drops request details older than the cutoff timestamp and rebuilds aggregate counters.
+// It returns true when any record was removed.
+func (s *RequestStatistics) PruneBefore(cutoff time.Time) bool {
+	if s == nil || cutoff.IsZero() {
+		return false
+	}
+
+	newAPIs := make(map[string]*apiStats)
+	newRequestsByDay := make(map[string]int64)
+	newRequestsByHour := make(map[int]int64)
+	newTokensByDay := make(map[string]int64)
+	newTokensByHour := make(map[int]int64)
+
+	var totalRequests int64
+	var successCount int64
+	var failureCount int64
+	var totalTokens int64
+
+	removed := false
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for apiName, stats := range s.apis {
+		if stats == nil || len(stats.Models) == 0 {
+			continue
+		}
+
+		apiTotalRequests := int64(0)
+		apiTotalTokens := int64(0)
+		newModels := make(map[string]*modelStats, len(stats.Models))
+
+		for modelName, modelStatsValue := range stats.Models {
+			if modelStatsValue == nil || len(modelStatsValue.Details) == 0 {
+				continue
+			}
+
+			kept := make([]RequestDetail, 0, len(modelStatsValue.Details))
+			modelTotalTokens := int64(0)
+
+			for _, detail := range modelStatsValue.Details {
+				if !detail.Timestamp.IsZero() && detail.Timestamp.Before(cutoff) {
+					removed = true
+					continue
+				}
+
+				detail.Tokens = normaliseTokenStats(detail.Tokens)
+				kept = append(kept, detail)
+
+				tokens := detail.Tokens.TotalTokens
+				if tokens < 0 {
+					tokens = 0
+				}
+				modelTotalTokens += tokens
+
+				totalRequests++
+				apiTotalRequests++
+				totalTokens += tokens
+				apiTotalTokens += tokens
+
+				if detail.Failed {
+					failureCount++
+				} else {
+					successCount++
+				}
+
+				dayKey := detail.Timestamp.Format("2006-01-02")
+				hourKey := detail.Timestamp.Hour()
+				newRequestsByDay[dayKey]++
+				newTokensByDay[dayKey] += tokens
+				newRequestsByHour[hourKey]++
+				newTokensByHour[hourKey] += tokens
+			}
+
+			if len(kept) == 0 {
+				removed = true
+				continue
+			}
+
+			newModels[modelName] = &modelStats{
+				TotalRequests: int64(len(kept)),
+				TotalTokens:   modelTotalTokens,
+				Details:       kept,
+			}
+		}
+
+		if len(newModels) == 0 {
+			removed = true
+			continue
+		}
+
+		newAPIs[apiName] = &apiStats{
+			TotalRequests: apiTotalRequests,
+			TotalTokens:   apiTotalTokens,
+			Models:        newModels,
+		}
+	}
+
+	s.totalRequests = totalRequests
+	s.successCount = successCount
+	s.failureCount = failureCount
+	s.totalTokens = totalTokens
+	s.apis = newAPIs
+	s.requestsByDay = newRequestsByDay
+	s.requestsByHour = newRequestsByHour
+	s.tokensByDay = newTokensByDay
+	s.tokensByHour = newTokensByHour
+
+	if removed {
+		s.dirty.Store(true)
+	}
+
+	return removed
+}
+
 // Record ingests a new usage record and updates the aggregates.
 func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record) {
 	if s == nil {
@@ -199,6 +335,7 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 	s.updateAPIStats(stats, modelName, RequestDetail{
 		Timestamp: timestamp,
 		Source:    record.Source,
+		AuthID:    record.AuthID,
 		AuthIndex: record.AuthIndex,
 		Tokens:    detail,
 		Failed:    failed,
@@ -208,6 +345,7 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 	s.requestsByHour[hourKey]++
 	s.tokensByDay[dayKey] += totalTokens
 	s.tokensByHour[hourKey] += totalTokens
+	s.dirty.Store(true)
 }
 
 func (s *RequestStatistics) updateAPIStats(stats *apiStats, model string, detail RequestDetail) {
@@ -373,17 +511,19 @@ func (s *RequestStatistics) recordImported(apiName, modelName string, stats *api
 	s.requestsByHour[hourKey]++
 	s.tokensByDay[dayKey] += totalTokens
 	s.tokensByHour[hourKey] += totalTokens
+	s.dirty.Store(true)
 }
 
 func dedupKey(apiName, modelName string, detail RequestDetail) string {
 	timestamp := detail.Timestamp.UTC().Format(time.RFC3339Nano)
 	tokens := normaliseTokenStats(detail.Tokens)
 	return fmt.Sprintf(
-		"%s|%s|%s|%s|%s|%t|%d|%d|%d|%d|%d",
+		"%s|%s|%s|%s|%s|%s|%t|%d|%d|%d|%d|%d",
 		apiName,
 		modelName,
 		timestamp,
 		detail.Source,
+		detail.AuthID,
 		detail.AuthIndex,
 		detail.Failed,
 		tokens.InputTokens,
