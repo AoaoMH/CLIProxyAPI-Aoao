@@ -266,6 +266,12 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	s.mgmt.SetLogDirectory(logDir)
 	s.localPassword = optionState.localPassword
 
+	usageSnapshotPath := filepath.Join(logDir, "usage_snapshot.json")
+	if err := usage.LoadSnapshotInto(usage.GetRequestStatistics(), usageSnapshotPath); err != nil {
+		log.WithError(err).Warn("failed to load usage statistics snapshot")
+	}
+	usage.StartSnapshotPersistence(usage.GetRequestStatistics(), usageSnapshotPath, 1*time.Minute)
+
 	// Initialize usage records SQLite storage
 	if err := usagerecord.InitDefaultStore(logDir); err != nil {
 		log.WithError(err).Warn("failed to initialize usage record store")
