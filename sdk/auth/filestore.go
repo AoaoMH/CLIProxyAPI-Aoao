@@ -187,6 +187,10 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 	if provider == "" {
 		provider = "unknown"
 	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "gemini" {
+		provider = "gemini-cli"
+	}
 	if provider == "antigravity" {
 		projectID := ""
 		if pid, ok := metadata["project_id"].(string); ok {
@@ -212,13 +216,30 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 		return nil, fmt.Errorf("stat file: %w", err)
 	}
 	id := s.idFor(path, baseDir)
+
+	proxyURL := ""
+	if v, ok := metadata["proxy_url"].(string); ok {
+		proxyURL = strings.TrimSpace(v)
+	}
+
+	prefix := ""
+	if rawPrefix, ok := metadata["prefix"].(string); ok {
+		trimmed := strings.TrimSpace(rawPrefix)
+		trimmed = strings.Trim(trimmed, "/")
+		if trimmed != "" && !strings.Contains(trimmed, "/") {
+			prefix = trimmed
+		}
+	}
+
 	auth := &cliproxyauth.Auth{
 		ID:               id,
 		Provider:         provider,
+		Prefix:           prefix,
 		FileName:         id,
 		Label:            s.labelFor(metadata),
 		Status:           cliproxyauth.StatusActive,
 		Attributes:       map[string]string{"path": path},
+		ProxyURL:         proxyURL,
 		Metadata:         metadata,
 		CreatedAt:        info.ModTime(),
 		UpdatedAt:        info.ModTime(),

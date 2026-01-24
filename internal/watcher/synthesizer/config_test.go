@@ -109,6 +109,21 @@ func TestConfigSynthesizer_GeminiKeys(t *testing.T) {
 			},
 		},
 		{
+			name: "disabled gemini key",
+			geminiKeys: []config.GeminiKey{
+				{APIKey: "disabled-key", Disabled: true},
+			},
+			wantLen: 1,
+			validate: func(t *testing.T, auths []*coreauth.Auth) {
+				if auths[0].Status != coreauth.StatusDisabled {
+					t.Errorf("expected status disabled, got %s", auths[0].Status)
+				}
+				if !auths[0].Disabled {
+					t.Error("expected auth disabled=true")
+				}
+			},
+		},
+		{
 			name: "empty api key skipped",
 			geminiKeys: []config.GeminiKey{
 				{APIKey: ""},

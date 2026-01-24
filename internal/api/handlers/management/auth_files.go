@@ -352,6 +352,14 @@ func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
 				emailValue := gjson.GetBytes(data, "email").String()
 				fileData["type"] = typeValue
 				fileData["email"] = emailValue
+				proxyValue := strings.TrimSpace(gjson.GetBytes(data, "proxy_url").String())
+				if proxyValue != "" {
+					fileData["proxy_url"] = proxyValue
+				}
+				prefixValue := strings.TrimSpace(gjson.GetBytes(data, "prefix").String())
+				if prefixValue != "" {
+					fileData["prefix"] = prefixValue
+				}
 			}
 
 			files = append(files, fileData)
@@ -412,6 +420,12 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	}
 	if !auth.LastRefreshedAt.IsZero() {
 		entry["last_refresh"] = auth.LastRefreshedAt
+	}
+	if v := strings.TrimSpace(auth.ProxyURL); v != "" {
+		entry["proxy_url"] = v
+	}
+	if v := strings.TrimSpace(auth.Prefix); v != "" {
+		entry["prefix"] = v
 	}
 	if path != "" {
 		entry["path"] = path
@@ -707,6 +721,10 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 	if provider == "" {
 		provider = "unknown"
 	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "gemini" {
+		provider = "gemini-cli"
+	}
 	label := provider
 	if email, ok := metadata["email"].(string); ok && email != "" {
 		label = email
@@ -717,6 +735,21 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 	if authID == "" {
 		authID = path
 	}
+
+	proxyURL := ""
+	if p, ok := metadata["proxy_url"].(string); ok {
+		proxyURL = strings.TrimSpace(p)
+	}
+
+	prefix := ""
+	if rawPrefix, ok := metadata["prefix"].(string); ok {
+		trimmed := strings.TrimSpace(rawPrefix)
+		trimmed = strings.Trim(trimmed, "/")
+		if trimmed != "" && !strings.Contains(trimmed, "/") {
+			prefix = trimmed
+		}
+	}
+
 	attr := map[string]string{
 		"path":   path,
 		"source": path,
@@ -727,7 +760,9 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 		FileName:   filepath.Base(path),
 		Label:      label,
 		Status:     coreauth.StatusActive,
+		Prefix:     prefix,
 		Attributes: attr,
+		ProxyURL:   proxyURL,
 		Metadata:   metadata,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
@@ -742,11 +777,156 @@ func (h *Handler) registerAuthFromFile(ctx context.Context, path string, data []
 		}
 		auth.NextRefreshAfter = existing.NextRefreshAfter
 		auth.Runtime = existing.Runtime
+		auth.Disabled = existing.Disabled
+		auth.Status = existing.Status
+		auth.StatusMessage = existing.StatusMessage
+		auth.Unavailable = existing.Unavailable
+		auth.Quota = existing.Quota
+		auth.LastError = existing.LastError
+		auth.ModelStates = existing.ModelStates
+		auth.NextRetryAfter = existing.NextRetryAfter
 		_, err := h.authManager.Update(ctx, auth)
 		return err
 	}
 	_, err := h.authManager.Register(ctx, auth)
 	return err
+}
+
+// PatchAuthFileMetadata updates selected metadata fields (e.g. proxy_url, prefix) for an auth file.
+func (h *Handler) PatchAuthFileMetadata(c *gin.Context) {
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
+		return
+	}
+
+	var req struct {
+		Name          string  `json:"name"`
+		ProxyURL      *string `json:"proxy_url"`
+		ProxyURLCamel *string `json:"proxyUrl"`
+		Prefix        *string `json:"prefix"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+
+	proxyPtr := req.ProxyURL
+	if proxyPtr == nil {
+		proxyPtr = req.ProxyURLCamel
+	}
+	prefixPtr := req.Prefix
+
+	if proxyPtr == nil && prefixPtr == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
+		return
+	}
+
+	// Find auth by name or ID so we can resolve the backing file path.
+	var targetAuth *coreauth.Auth
+	if auth, ok := h.authManager.GetByID(name); ok {
+		targetAuth = auth
+	} else {
+		for _, auth := range h.authManager.List() {
+			if auth == nil {
+				continue
+			}
+			if auth.FileName == name || auth.ID == name {
+				targetAuth = auth
+				break
+			}
+		}
+	}
+	if targetAuth != nil && isRuntimeOnlyAuth(targetAuth) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "runtime-only auth does not support metadata editing"})
+		return
+	}
+
+	path := ""
+	if targetAuth != nil {
+		path = strings.TrimSpace(authAttribute(targetAuth, "path"))
+	}
+	if path == "" {
+		if strings.Contains(name, string(os.PathSeparator)) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid name"})
+			return
+		}
+		if !strings.HasSuffix(strings.ToLower(name), ".json") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "name must end with .json"})
+			return
+		}
+		path = filepath.Join(h.cfg.AuthDir, filepath.Base(name))
+		if !filepath.IsAbs(path) {
+			if abs, errAbs := filepath.Abs(path); errAbs == nil {
+				path = abs
+			}
+		}
+	}
+
+	data, errRead := os.ReadFile(path)
+	if errRead != nil {
+		if os.IsNotExist(errRead) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read file: %v", errRead)})
+		return
+	}
+
+	metadata := make(map[string]any)
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid auth file"})
+		return
+	}
+
+	updated := false
+	if proxyPtr != nil {
+		v := strings.TrimSpace(*proxyPtr)
+		if v == "" {
+			delete(metadata, "proxy_url")
+		} else {
+			metadata["proxy_url"] = v
+		}
+		updated = true
+	}
+	if prefixPtr != nil {
+		v := strings.TrimSpace(*prefixPtr)
+		v = strings.Trim(v, "/")
+		if v == "" {
+			delete(metadata, "prefix")
+		} else if strings.Contains(v, "/") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "prefix must not contain '/'"})
+			return
+		} else {
+			metadata["prefix"] = v
+		}
+		updated = true
+	}
+	if !updated {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
+		return
+	}
+
+	out, errMarshal := json.Marshal(metadata)
+	if errMarshal != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to serialize auth file"})
+		return
+	}
+	if errWrite := os.WriteFile(path, out, 0o600); errWrite != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to write file: %v", errWrite)})
+		return
+	}
+	if errReg := h.registerAuthFromFile(c.Request.Context(), path, out); errReg != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errReg.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 // PatchAuthFileStatus toggles the disabled state of an auth file
