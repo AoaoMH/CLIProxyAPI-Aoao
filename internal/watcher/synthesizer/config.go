@@ -81,6 +81,7 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
+		applyConfigAuthDisabled(a, entry.Disabled)
 		ApplyAuthExcludedModelsMeta(a, cfg, entry.ExcludedModels, "apikey")
 		out = append(out, a)
 	}
@@ -129,6 +130,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
+		applyConfigAuthDisabled(a, ck.Disabled)
 		ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
 		out = append(out, a)
 	}
@@ -176,6 +178,7 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
+		applyConfigAuthDisabled(a, ck.Disabled)
 		ApplyAuthExcludedModelsMeta(a, cfg, ck.ExcludedModels, "apikey")
 		out = append(out, a)
 	}
@@ -312,8 +315,17 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
+		applyConfigAuthDisabled(a, compat.Disabled)
 		ApplyAuthExcludedModelsMeta(a, cfg, nil, "apikey")
 		out = append(out, a)
 	}
 	return out
+}
+
+func applyConfigAuthDisabled(a *coreauth.Auth, disabled bool) {
+	if a == nil || !disabled {
+		return
+	}
+	a.Disabled = true
+	a.Status = coreauth.StatusDisabled
 }

@@ -282,6 +282,30 @@ func (s *Service) applyCoreAuthAddOrUpdate(ctx context.Context, auth *coreauth.A
 		auth.CreatedAt = existing.CreatedAt
 		auth.LastRefreshedAt = existing.LastRefreshedAt
 		auth.NextRefreshAfter = existing.NextRefreshAfter
+		auth.NextRetryAfter = existing.NextRetryAfter
+
+		// Preserve runtime state that is not derived from config/auth files.
+		auth.Unavailable = existing.Unavailable
+		auth.Quota = existing.Quota
+		auth.LastError = existing.LastError
+		auth.ModelStates = existing.ModelStates
+
+		// Preserve management-disabled state for file-backed auths so file edits/config reloads
+		// (which do not encode disabled state) don't accidentally re-enable credentials.
+		if existing.Disabled && !auth.Disabled {
+			msg := strings.ToLower(strings.TrimSpace(existing.StatusMessage))
+			if strings.Contains(msg, "management") {
+				if existing.Attributes != nil && strings.TrimSpace(existing.Attributes["path"]) != "" {
+					auth.Disabled = true
+					auth.Status = existing.Status
+					auth.StatusMessage = existing.StatusMessage
+				}
+			}
+		}
+		if auth.Runtime == nil {
+			auth.Runtime = existing.Runtime
+		}
+
 		if _, err := s.coreManager.Update(ctx, auth); err != nil {
 			log.Errorf("failed to update auth %s: %v", auth.ID, err)
 		}
