@@ -101,54 +101,58 @@ func ParseTimeParamToTime(param string) time.Time {
 
 // Record represents a single API usage record stored in the database.
 type Record struct {
-	ID              int64             `json:"id"`
-	RequestID       string            `json:"request_id"`
-	Timestamp       time.Time         `json:"timestamp"`
-	IP              string            `json:"ip"`
-	APIKey          string            `json:"api_key"`
-	APIKeyMasked    string            `json:"api_key_masked"`
-	Model           string            `json:"model"`
-	Provider        string            `json:"provider"`
-	IsStreaming     bool              `json:"is_streaming"`
-	InputTokens     int64             `json:"input_tokens"`
-	OutputTokens    int64             `json:"output_tokens"`
-	TotalTokens     int64             `json:"total_tokens"`
-	CachedTokens    int64             `json:"cached_tokens"`
-	ReasoningTokens int64             `json:"reasoning_tokens"`
-	DurationMs      int64             `json:"duration_ms"`
-	StatusCode      int               `json:"status_code"`
-	Success         bool              `json:"success"`
-	RequestURL      string            `json:"request_url"`
-	RequestMethod   string            `json:"request_method"`
-	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
-	RequestBody     string            `json:"request_body,omitempty"`
-	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
-	ResponseBody    string            `json:"response_body,omitempty"`
+	ID                     int64             `json:"id"`
+	RequestID              string            `json:"request_id"`
+	Timestamp              time.Time         `json:"timestamp"`
+	IP                     string            `json:"ip"`
+	APIKey                 string            `json:"api_key"`
+	APIKeyMasked           string            `json:"api_key_masked"`
+	Model                  string            `json:"model"`
+	Provider               string            `json:"provider"`
+	UpstreamProvider       string            `json:"upstream_provider,omitempty"`
+	UpstreamAPIKeyMasked   string            `json:"upstream_api_key_masked,omitempty"`
+	UpstreamCandidateCount int               `json:"upstream_candidate_count,omitempty"`
+	UpstreamHasRetry       bool              `json:"upstream_has_retry,omitempty"`
+	IsStreaming            bool              `json:"is_streaming"`
+	InputTokens            int64             `json:"input_tokens"`
+	OutputTokens           int64             `json:"output_tokens"`
+	TotalTokens            int64             `json:"total_tokens"`
+	CachedTokens           int64             `json:"cached_tokens"`
+	ReasoningTokens        int64             `json:"reasoning_tokens"`
+	DurationMs             int64             `json:"duration_ms"`
+	StatusCode             int               `json:"status_code"`
+	Success                bool              `json:"success"`
+	RequestURL             string            `json:"request_url"`
+	RequestMethod          string            `json:"request_method"`
+	RequestHeaders         map[string]string `json:"request_headers,omitempty"`
+	RequestBody            string            `json:"request_body,omitempty"`
+	ResponseHeaders        map[string]string `json:"response_headers,omitempty"`
+	ResponseBody           string            `json:"response_body,omitempty"`
 }
 
 // ListQuery defines the query parameters for listing records.
 type ListQuery struct {
-	Page      int    `form:"page"`
-	PageSize  int    `form:"page_size"`
-	APIKey    string `form:"api_key"`
-	Model     string `form:"model"`
-	Provider  string `form:"provider"`
-	StartTime string `form:"start_time"`
-	EndTime   string `form:"end_time"`
-	Success   *bool  `form:"success"`
-	Search    string `form:"search"`
-	SortBy    string `form:"sort_by"`
-	SortOrder string `form:"sort_order"`
-	IncludeKPIs bool `form:"include_kpis"`
+	Page        int    `form:"page"`
+	PageSize    int    `form:"page_size"`
+	APIKey      string `form:"api_key"`
+	Model       string `form:"model"`
+	Provider    string `form:"provider"`
+	StartTime   string `form:"start_time"`
+	EndTime     string `form:"end_time"`
+	Success     *bool  `form:"success"`
+	Search      string `form:"search"`
+	SortBy      string `form:"sort_by"`
+	SortOrder   string `form:"sort_order"`
+	IncludeKPIs bool   `form:"include_kpis"`
 }
 
 // ListResult contains the paginated list of records.
 type ListResult struct {
-	Records    []Record `json:"records"`
-	Total      int64    `json:"total"`
-	Page       int      `json:"page"`
-	PageSize   int      `json:"page_size"`
-	TotalPages int      `json:"total_pages"`
+	Records    []Record   `json:"records"`
+	Total      int64      `json:"total"`
+	Page       int        `json:"page"`
+	PageSize   int        `json:"page_size"`
+	TotalPages int        `json:"total_pages"`
 	KPIs       *UsageKPIs `json:"kpis,omitempty"`
 }
 
@@ -471,6 +475,32 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 	offset := (query.Page - 1) * query.PageSize
 	selectQuery := fmt.Sprintf(`
 		SELECT id, request_id, timestamp, ip, api_key, api_key_masked, model, provider,
+			COALESCE((
+				SELECT provider
+				FROM request_candidates rc
+				WHERE rc.request_id = usage_records.request_id
+				ORDER BY rc.success DESC, rc.candidate_index DESC, rc.retry_index DESC
+				LIMIT 1
+			), '') AS upstream_provider,
+			COALESCE((
+				SELECT api_key_masked
+				FROM request_candidates rc
+				WHERE rc.request_id = usage_records.request_id
+				ORDER BY rc.success DESC, rc.candidate_index DESC, rc.retry_index DESC
+				LIMIT 1
+			), '') AS upstream_api_key_masked,
+			(
+				SELECT COUNT(*)
+				FROM request_candidates rc
+				WHERE rc.request_id = usage_records.request_id
+			) AS upstream_candidate_count,
+			(
+				SELECT CASE WHEN EXISTS(
+					SELECT 1
+					FROM request_candidates rc
+					WHERE rc.request_id = usage_records.request_id AND rc.retry_index > 0
+				) THEN 1 ELSE 0 END
+			) AS upstream_has_retry,
 			is_streaming, input_tokens, output_tokens, total_tokens, cached_tokens, reasoning_tokens,
 			duration_ms, status_code, success, request_url, request_method,
 			request_headers, request_body, response_headers, response_body
@@ -492,10 +522,12 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 		var isStreaming, success int
 		var timestamp string
 		var reqHeadersJSON, respHeadersJSON string
+		var upstreamHasRetry int
 
 		err := rows.Scan(
 			&r.ID, &r.RequestID, &timestamp, &r.IP, &r.APIKey, &r.APIKeyMasked,
-			&r.Model, &r.Provider, &isStreaming, &r.InputTokens,
+			&r.Model, &r.Provider, &r.UpstreamProvider, &r.UpstreamAPIKeyMasked, &r.UpstreamCandidateCount, &upstreamHasRetry,
+			&isStreaming, &r.InputTokens,
 			&r.OutputTokens, &r.TotalTokens, &r.CachedTokens, &r.ReasoningTokens, &r.DurationMs, &r.StatusCode,
 			&success, &r.RequestURL, &r.RequestMethod,
 			&reqHeadersJSON, &r.RequestBody, &respHeadersJSON, &r.ResponseBody,
@@ -514,6 +546,10 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 		}
 		r.IsStreaming = isStreaming == 1
 		r.Success = success == 1
+		r.UpstreamHasRetry = upstreamHasRetry == 1
+		if r.UpstreamProvider == "" {
+			r.UpstreamProvider = r.Provider
+		}
 
 		// Parse headers JSON
 		if err := json.Unmarshal([]byte(reqHeadersJSON), &r.RequestHeaders); err != nil {
@@ -559,6 +595,32 @@ func (s *Store) GetByID(ctx context.Context, id int64) (*Record, error) {
 
 	query := `
 		SELECT id, request_id, timestamp, ip, api_key, api_key_masked, model, provider,
+			COALESCE((
+				SELECT provider
+				FROM request_candidates rc
+				WHERE rc.request_id = usage_records.request_id
+				ORDER BY rc.success DESC, rc.candidate_index DESC, rc.retry_index DESC
+				LIMIT 1
+			), '') AS upstream_provider,
+			COALESCE((
+				SELECT api_key_masked
+				FROM request_candidates rc
+				WHERE rc.request_id = usage_records.request_id
+				ORDER BY rc.success DESC, rc.candidate_index DESC, rc.retry_index DESC
+				LIMIT 1
+			), '') AS upstream_api_key_masked,
+			(
+				SELECT COUNT(*)
+				FROM request_candidates rc
+				WHERE rc.request_id = usage_records.request_id
+			) AS upstream_candidate_count,
+			(
+				SELECT CASE WHEN EXISTS(
+					SELECT 1
+					FROM request_candidates rc
+					WHERE rc.request_id = usage_records.request_id AND rc.retry_index > 0
+				) THEN 1 ELSE 0 END
+			) AS upstream_has_retry,
 			is_streaming, input_tokens, output_tokens, total_tokens, cached_tokens, reasoning_tokens,
 			duration_ms, status_code, success, request_url, request_method,
 			request_headers, request_body, response_headers, response_body
@@ -570,10 +632,12 @@ func (s *Store) GetByID(ctx context.Context, id int64) (*Record, error) {
 	var isStreaming, success int
 	var timestamp string
 	var reqHeadersJSON, respHeadersJSON string
+	var upstreamHasRetry int
 
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&r.ID, &r.RequestID, &timestamp, &r.IP, &r.APIKey, &r.APIKeyMasked,
-		&r.Model, &r.Provider, &isStreaming, &r.InputTokens,
+		&r.Model, &r.Provider, &r.UpstreamProvider, &r.UpstreamAPIKeyMasked, &r.UpstreamCandidateCount, &upstreamHasRetry,
+		&isStreaming, &r.InputTokens,
 		&r.OutputTokens, &r.TotalTokens, &r.CachedTokens, &r.ReasoningTokens, &r.DurationMs, &r.StatusCode,
 		&success, &r.RequestURL, &r.RequestMethod,
 		&reqHeadersJSON, &r.RequestBody, &respHeadersJSON, &r.ResponseBody,
@@ -594,6 +658,10 @@ func (s *Store) GetByID(ctx context.Context, id int64) (*Record, error) {
 	}
 	r.IsStreaming = isStreaming == 1
 	r.Success = success == 1
+	r.UpstreamHasRetry = upstreamHasRetry == 1
+	if r.UpstreamProvider == "" {
+		r.UpstreamProvider = r.Provider
+	}
 
 	if err := json.Unmarshal([]byte(reqHeadersJSON), &r.RequestHeaders); err != nil {
 		r.RequestHeaders = make(map[string]string)
