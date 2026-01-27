@@ -171,6 +171,8 @@ type Server struct {
 	keepAliveOnTimeout func()
 	keepAliveHeartbeat chan struct{}
 	keepAliveStop      chan struct{}
+
+	usageRecordCleaner *usagerecord.RetentionCleaner
 }
 
 // NewServer creates and initializes a new API server instance.
@@ -283,6 +285,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		// Set callback to increment API key usage count and last used time
 		usagerecord.SetUsageIncrementor(s.mgmt.IncrementAPIKeyUsage)
 	}
+	s.configureUsageRecordRetention(cfg)
 
 	// Setup routes
 	s.setupRoutes()
@@ -860,6 +863,11 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
+	if s.usageRecordCleaner != nil {
+		s.usageRecordCleaner.Stop()
+		s.usageRecordCleaner = nil
+	}
+
 	// Shutdown the HTTP server.
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("failed to shutdown HTTP server: %v", err)
@@ -1040,6 +1048,8 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		s.mgmt.SetAuthManager(s.handlers.AuthManager)
 	}
 
+	s.configureUsageRecordRetention(cfg)
+
 	// Notify Amp module of config changes (for model mapping hot-reload)
 	if s.ampModule != nil {
 		log.Debugf("triggering amp module config update")
@@ -1076,6 +1086,40 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		vertexAICompatCount,
 		openAICompatCount,
 	)
+}
+
+func (s *Server) configureUsageRecordRetention(cfg *config.Config) {
+	if s == nil {
+		return
+	}
+
+	days := 0
+	if cfg != nil {
+		days = cfg.UsageRecordsRetentionDays
+	}
+
+	switch {
+	case days <= 0:
+		if s.usageRecordCleaner != nil {
+			s.usageRecordCleaner.Stop()
+			s.usageRecordCleaner = nil
+			log.Info("usage record retention cleanup disabled")
+		}
+		return
+	case usagerecord.DefaultStore() == nil:
+		log.Warn("usage record retention configured but usage record store is not available")
+		return
+	case s.usageRecordCleaner == nil:
+		s.usageRecordCleaner = usagerecord.NewRetentionCleaner(usagerecord.DefaultStore(), days)
+		s.usageRecordCleaner.Start()
+		log.Infof("usage record retention cleanup enabled: %d days", days)
+		return
+	default:
+		previous := s.usageRecordCleaner.UpdateRetentionDays(days)
+		if previous != days {
+			log.Infof("usage record retention updated: %d -> %d days", previous, days)
+		}
+	}
 }
 
 func (s *Server) SetWebsocketAuthChangeHandler(fn func(bool, bool)) {
