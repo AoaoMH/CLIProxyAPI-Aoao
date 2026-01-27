@@ -614,7 +614,7 @@ func (s *Store) DeleteOlderThan(ctx context.Context, age time.Duration) (int64, 
 		return 0, fmt.Errorf("store is closed")
 	}
 
-	cutoff := time.Now().Add(-age)
+	cutoff := time.Now().Add(-age).Format(time.RFC3339)
 	result, err := s.db.ExecContext(ctx, "DELETE FROM usage_records WHERE timestamp < ?", cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("failed to delete old records: %w", err)
