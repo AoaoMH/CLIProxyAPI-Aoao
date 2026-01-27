@@ -113,6 +113,8 @@ type Record struct {
 	InputTokens     int64             `json:"input_tokens"`
 	OutputTokens    int64             `json:"output_tokens"`
 	TotalTokens     int64             `json:"total_tokens"`
+	CachedTokens    int64             `json:"cached_tokens"`
+	ReasoningTokens int64             `json:"reasoning_tokens"`
 	DurationMs      int64             `json:"duration_ms"`
 	StatusCode      int               `json:"status_code"`
 	Success         bool              `json:"success"`
@@ -137,6 +139,7 @@ type ListQuery struct {
 	Search    string `form:"search"`
 	SortBy    string `form:"sort_by"`
 	SortOrder string `form:"sort_order"`
+	IncludeKPIs bool `form:"include_kpis"`
 }
 
 // ListResult contains the paginated list of records.
@@ -146,6 +149,7 @@ type ListResult struct {
 	Page       int      `json:"page"`
 	PageSize   int      `json:"page_size"`
 	TotalPages int      `json:"total_pages"`
+	KPIs       *UsageKPIs `json:"kpis,omitempty"`
 }
 
 // Store provides SQLite-based storage for usage records.
@@ -251,6 +255,8 @@ func (s *Store) initSchema() error {
 		input_tokens INTEGER NOT NULL DEFAULT 0,
 		output_tokens INTEGER NOT NULL DEFAULT 0,
 		total_tokens INTEGER NOT NULL DEFAULT 0,
+		cached_tokens INTEGER NOT NULL DEFAULT 0,
+		reasoning_tokens INTEGER NOT NULL DEFAULT 0,
 		duration_ms INTEGER NOT NULL DEFAULT 0,
 		status_code INTEGER NOT NULL DEFAULT 0,
 		success INTEGER NOT NULL DEFAULT 1,
@@ -298,6 +304,8 @@ func (s *Store) initSchema() error {
 	// Hotfix/Migration: Add ip column if it doesn't exist
 	// Ignore errors as column might already exist
 	_, _ = s.db.Exec("ALTER TABLE usage_records ADD COLUMN ip TEXT NOT NULL DEFAULT ''")
+	_, _ = s.db.Exec("ALTER TABLE usage_records ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0")
+	_, _ = s.db.Exec("ALTER TABLE usage_records ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0")
 
 	return nil
 }
@@ -325,9 +333,10 @@ func (s *Store) Insert(ctx context.Context, record *Record) error {
 	INSERT INTO usage_records (
 		request_id, timestamp, ip, api_key, api_key_masked, model, provider,
 		is_streaming, input_tokens, output_tokens, total_tokens,
+		cached_tokens, reasoning_tokens,
 		duration_ms, status_code, success, request_url, request_method,
 		request_headers, request_body, response_headers, response_body
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	isStreaming := 0
@@ -351,6 +360,8 @@ func (s *Store) Insert(ctx context.Context, record *Record) error {
 		record.InputTokens,
 		record.OutputTokens,
 		record.TotalTokens,
+		record.CachedTokens,
+		record.ReasoningTokens,
 		record.DurationMs,
 		record.StatusCode,
 		success,
@@ -432,6 +443,8 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 	if len(conditions) > 0 {
 		whereClause = "WHERE " + strings.Join(conditions, " AND ")
 	}
+	baseArgs := make([]interface{}, len(args))
+	copy(baseArgs, args)
 
 	// Count total records
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM usage_records %s", whereClause)
@@ -458,7 +471,7 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 	offset := (query.Page - 1) * query.PageSize
 	selectQuery := fmt.Sprintf(`
 		SELECT id, request_id, timestamp, ip, api_key, api_key_masked, model, provider,
-			is_streaming, input_tokens, output_tokens, total_tokens,
+			is_streaming, input_tokens, output_tokens, total_tokens, cached_tokens, reasoning_tokens,
 			duration_ms, status_code, success, request_url, request_method,
 			request_headers, request_body, response_headers, response_body
 		FROM usage_records %s
@@ -483,7 +496,7 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 		err := rows.Scan(
 			&r.ID, &r.RequestID, &timestamp, &r.IP, &r.APIKey, &r.APIKeyMasked,
 			&r.Model, &r.Provider, &isStreaming, &r.InputTokens,
-			&r.OutputTokens, &r.TotalTokens, &r.DurationMs, &r.StatusCode,
+			&r.OutputTokens, &r.TotalTokens, &r.CachedTokens, &r.ReasoningTokens, &r.DurationMs, &r.StatusCode,
 			&success, &r.RequestURL, &r.RequestMethod,
 			&reqHeadersJSON, &r.RequestBody, &respHeadersJSON, &r.ResponseBody,
 		)
@@ -515,13 +528,24 @@ func (s *Store) List(ctx context.Context, query ListQuery) (*ListResult, error) 
 
 	totalPages := int((total + int64(query.PageSize) - 1) / int64(query.PageSize))
 
-	return &ListResult{
+	result := &ListResult{
 		Records:    records,
 		Total:      total,
 		Page:       query.Page,
 		PageSize:   query.PageSize,
 		TotalPages: totalPages,
-	}, nil
+	}
+
+	if query.IncludeKPIs {
+		kpis, err := s.GetUsageKPIs(ctx, whereClause, baseArgs, query.StartTime, query.EndTime)
+		if err != nil {
+			log.WithError(err).Warn("failed to compute usage kpis")
+		} else {
+			result.KPIs = kpis
+		}
+	}
+
+	return result, nil
 }
 
 // GetByID retrieves a single record by ID including full request/response details.
@@ -535,7 +559,7 @@ func (s *Store) GetByID(ctx context.Context, id int64) (*Record, error) {
 
 	query := `
 		SELECT id, request_id, timestamp, ip, api_key, api_key_masked, model, provider,
-			is_streaming, input_tokens, output_tokens, total_tokens,
+			is_streaming, input_tokens, output_tokens, total_tokens, cached_tokens, reasoning_tokens,
 			duration_ms, status_code, success, request_url, request_method,
 			request_headers, request_body, response_headers, response_body
 		FROM usage_records
@@ -550,7 +574,7 @@ func (s *Store) GetByID(ctx context.Context, id int64) (*Record, error) {
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&r.ID, &r.RequestID, &timestamp, &r.IP, &r.APIKey, &r.APIKeyMasked,
 		&r.Model, &r.Provider, &isStreaming, &r.InputTokens,
-		&r.OutputTokens, &r.TotalTokens, &r.DurationMs, &r.StatusCode,
+		&r.OutputTokens, &r.TotalTokens, &r.CachedTokens, &r.ReasoningTokens, &r.DurationMs, &r.StatusCode,
 		&success, &r.RequestURL, &r.RequestMethod,
 		&reqHeadersJSON, &r.RequestBody, &respHeadersJSON, &r.ResponseBody,
 	)
@@ -970,6 +994,33 @@ type UsageSummary struct {
 	UniqueProviders int64   `json:"unique_providers"`
 }
 
+type KPITrendPoint struct {
+	T string `json:"t"`
+	V int64  `json:"v"`
+}
+
+// UsageKPIs contains lightweight KPI metrics for the usage records page.
+type UsageKPIs struct {
+	TotalRequests   int64 `json:"total_requests"`
+	SuccessRequests int64 `json:"success_requests"`
+	FailureRequests int64 `json:"failure_requests"`
+
+	TotalTokens     int64 `json:"total_tokens"`
+	CachedTokens    int64 `json:"cached_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+
+	RPM int64 `json:"rpm"`
+	TPM int64 `json:"tpm"`
+
+	TrendBucket   string          `json:"trend_bucket"` // hour | day
+	RequestsTrend []KPITrendPoint `json:"requests_trend"`
+	TokensTrend   []KPITrendPoint `json:"tokens_trend"`
+	RPMTrend      []KPITrendPoint `json:"rpm_trend"`
+	TPMTrend      []KPITrendPoint `json:"tpm_trend"`
+
+	GeneratedAt string `json:"generated_at"`
+}
+
 // GetUsageSummary returns overall usage summary.
 func (s *Store) GetUsageSummary(ctx context.Context, startTime, endTime string) (*UsageSummary, error) {
 	s.mu.RLock()
@@ -1026,6 +1077,199 @@ func (s *Store) GetUsageSummary(ctx context.Context, startTime, endTime string) 
 	}
 
 	return &summary, nil
+}
+
+func (s *Store) GetUsageKPIs(ctx context.Context, whereClause string, whereArgs []interface{}, startTime, endTime string) (*UsageKPIs, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, fmt.Errorf("store is closed")
+	}
+
+	kpis := &UsageKPIs{
+		GeneratedAt: time.Now().Format(time.RFC3339),
+	}
+
+	// Totals (based on the same filters as the list endpoint)
+	totalsQuery := fmt.Sprintf(`
+		SELECT
+			COUNT(*) as total_requests,
+			COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as success_requests,
+			COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) as failure_requests,
+			COALESCE(SUM(input_tokens + output_tokens + cached_tokens + reasoning_tokens), 0) as total_tokens,
+			COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+			COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens
+		FROM usage_records
+		%s
+	`, whereClause)
+
+	if err := s.db.QueryRowContext(ctx, totalsQuery, whereArgs...).Scan(
+		&kpis.TotalRequests,
+		&kpis.SuccessRequests,
+		&kpis.FailureRequests,
+		&kpis.TotalTokens,
+		&kpis.CachedTokens,
+		&kpis.ReasoningTokens,
+	); err != nil {
+		return nil, fmt.Errorf("failed to query usage kpis totals: %w", err)
+	}
+
+	// Determine time window for trends.
+	trendStart := ParseTimeParamToTime(startTime)
+	trendEnd := ParseTimeParamToTime(endTime)
+	if trendEnd.IsZero() {
+		trendEnd = time.Now()
+	}
+	if trendStart.IsZero() {
+		trendStart = trendEnd.Add(-24 * time.Hour)
+	}
+	if trendStart.After(trendEnd) {
+		trendStart, trendEnd = trendEnd, trendStart
+	}
+
+	// Choose bucket size for the compact sparkline.
+	bucket := "hour"
+	if trendEnd.Sub(trendStart) > 48*time.Hour {
+		bucket = "day"
+	}
+	kpis.TrendBucket = bucket
+
+	type aggRow struct {
+		key      string
+		requests int64
+		tokens   int64
+	}
+	aggMapRequests := make(map[string]int64)
+	aggMapTokens := make(map[string]int64)
+
+	keyExpr := "substr(timestamp, 1, 13)"
+	if bucket == "day" {
+		keyExpr = "substr(timestamp, 1, 10)"
+	}
+	trendQuery := fmt.Sprintf(`
+		SELECT
+			%s as bucket_key,
+			COUNT(*) as requests,
+			COALESCE(SUM(input_tokens + output_tokens + cached_tokens + reasoning_tokens), 0) as tokens
+		FROM usage_records
+		%s
+		GROUP BY bucket_key
+		ORDER BY bucket_key ASC
+	`, keyExpr, whereClause)
+
+	rows, err := s.db.QueryContext(ctx, trendQuery, whereArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query usage kpis trend: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var r aggRow
+		if err := rows.Scan(&r.key, &r.requests, &r.tokens); err != nil {
+			continue
+		}
+		label := r.key
+		if bucket == "hour" {
+			label = strings.Replace(r.key, "T", " ", 1) + ":00"
+		}
+		aggMapRequests[label] = r.requests
+		aggMapTokens[label] = r.tokens
+	}
+
+	if bucket == "day" {
+		startDay := time.Date(trendStart.Year(), trendStart.Month(), trendStart.Day(), 0, 0, 0, 0, trendStart.Location())
+		endDay := time.Date(trendEnd.Year(), trendEnd.Month(), trendEnd.Day(), 0, 0, 0, 0, trendEnd.Location())
+		for d := startDay; !d.After(endDay); d = d.AddDate(0, 0, 1) {
+			label := d.Format("2006-01-02")
+			kpis.RequestsTrend = append(kpis.RequestsTrend, KPITrendPoint{T: label, V: aggMapRequests[label]})
+			kpis.TokensTrend = append(kpis.TokensTrend, KPITrendPoint{T: label, V: aggMapTokens[label]})
+		}
+	} else {
+		startHour := trendStart.Truncate(time.Hour)
+		endHour := trendEnd.Truncate(time.Hour)
+		for h := startHour; !h.After(endHour); h = h.Add(time.Hour) {
+			label := h.Format("2006-01-02 15:00")
+			kpis.RequestsTrend = append(kpis.RequestsTrend, KPITrendPoint{T: label, V: aggMapRequests[label]})
+			kpis.TokensTrend = append(kpis.TokensTrend, KPITrendPoint{T: label, V: aggMapTokens[label]})
+		}
+	}
+
+	// RPM/TPM: based on the last 60 seconds up to endTime (or now if endTime not provided).
+	const rpmWindowSeconds = 60
+	windowEnd := trendEnd
+	windowStart := windowEnd.Add(-rpmWindowSeconds * time.Second)
+
+	rpmClause := strings.TrimSpace(whereClause)
+	rpmArgs := append([]interface{}{}, whereArgs...)
+	if rpmClause == "" {
+		rpmClause = "WHERE timestamp >= ? AND timestamp <= ?"
+	} else {
+		rpmClause = rpmClause + " AND timestamp >= ? AND timestamp <= ?"
+	}
+	rpmArgs = append(rpmArgs, windowStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
+
+	rpmQuery := fmt.Sprintf(`SELECT COUNT(*) FROM usage_records %s`, rpmClause)
+	if err := s.db.QueryRowContext(ctx, rpmQuery, rpmArgs...).Scan(&kpis.RPM); err != nil {
+		return nil, fmt.Errorf("failed to query rpm: %w", err)
+	}
+
+	tpmQuery := fmt.Sprintf(`SELECT COALESCE(SUM(input_tokens + output_tokens + cached_tokens + reasoning_tokens), 0) FROM usage_records %s`, rpmClause)
+	if err := s.db.QueryRowContext(ctx, tpmQuery, rpmArgs...).Scan(&kpis.TPM); err != nil {
+		return nil, fmt.Errorf("failed to query tpm: %w", err)
+	}
+
+	// RPM/TPM trend: last 60 minutes (per minute buckets).
+	const trendMinutes = 60
+	minEnd := windowEnd.Truncate(time.Minute)
+	minStart := minEnd.Add(-time.Duration(trendMinutes-1) * time.Minute)
+
+	minClause := strings.TrimSpace(whereClause)
+	minArgs := append([]interface{}{}, whereArgs...)
+	if minClause == "" {
+		minClause = "WHERE timestamp >= ? AND timestamp <= ?"
+	} else {
+		minClause = minClause + " AND timestamp >= ? AND timestamp <= ?"
+	}
+	minArgs = append(minArgs, minStart.Format(time.RFC3339), minEnd.Format(time.RFC3339))
+
+	minuteQuery := fmt.Sprintf(`
+		SELECT
+			substr(timestamp, 1, 16) as minute_key,
+			COUNT(*) as requests,
+			COALESCE(SUM(input_tokens + output_tokens + cached_tokens + reasoning_tokens), 0) as tokens
+		FROM usage_records
+		%s
+		GROUP BY minute_key
+		ORDER BY minute_key ASC
+	`, minClause)
+
+	minRows, err := s.db.QueryContext(ctx, minuteQuery, minArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query rpm/tpm trend: %w", err)
+	}
+	defer minRows.Close()
+
+	minReqMap := make(map[string]int64)
+	minTokMap := make(map[string]int64)
+	for minRows.Next() {
+		var key string
+		var req, tok int64
+		if err := minRows.Scan(&key, &req, &tok); err != nil {
+			continue
+		}
+		label := strings.Replace(key, "T", " ", 1)
+		minReqMap[label] = req
+		minTokMap[label] = tok
+	}
+
+	for t := minStart; !t.After(minEnd); t = t.Add(time.Minute) {
+		label := t.Format("2006-01-02 15:04")
+		kpis.RPMTrend = append(kpis.RPMTrend, KPITrendPoint{T: label, V: minReqMap[label]})
+		kpis.TPMTrend = append(kpis.TPMTrend, KPITrendPoint{T: label, V: minTokMap[label]})
+	}
+
+	return kpis, nil
 }
 
 // RequestTimelinePoint represents a single point in the hourly request timeline.

@@ -211,6 +211,8 @@ func (p *Plugin) HandleUsage(ctx context.Context, record coreusage.Record) {
 		InputTokens:     record.Detail.InputTokens,
 		OutputTokens:    record.Detail.OutputTokens,
 		TotalTokens:     record.Detail.InputTokens + record.Detail.OutputTokens,
+		CachedTokens:    record.Detail.CachedTokens,
+		ReasoningTokens: record.Detail.ReasoningTokens,
 		DurationMs:      durationMs,
 		StatusCode:      statusCode,
 		Success:         success,
