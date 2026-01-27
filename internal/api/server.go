@@ -284,6 +284,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		usagerecord.SetTokenIncrementor(s.mgmt.IncrementAPIKeyTokens)
 		// Set callback to increment API key usage count and last used time
 		usagerecord.SetUsageIncrementor(s.mgmt.IncrementAPIKeyUsage)
+		// Enable request trace timeline recording (provider + credential path).
+		if authManager != nil {
+			authManager.SetHook(usagerecord.NewCandidateHook())
+		}
 	}
 	s.configureUsageRecordRetention(cfg)
 
