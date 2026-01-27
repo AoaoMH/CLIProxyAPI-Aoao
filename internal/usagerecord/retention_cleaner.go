@@ -167,10 +167,7 @@ func (s *Store) deleteOlderThanCutoffBatch(ctx context.Context, cutoff string, b
 		batchSize = defaultRetentionBatchSize
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
+	if s.isClosed() {
 		return 0, fmt.Errorf("store is closed")
 	}
 
