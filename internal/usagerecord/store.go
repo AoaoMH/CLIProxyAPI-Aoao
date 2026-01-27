@@ -606,8 +606,7 @@ func (s *Store) listUncached(ctx context.Context, query ListQuery) (*ListResult,
 				) THEN 1 ELSE 0 END
 			) AS upstream_has_retry,
 			is_streaming, input_tokens, output_tokens, total_tokens, cached_tokens, reasoning_tokens,
-			duration_ms, status_code, success, request_url, request_method,
-			request_headers, request_body, response_headers, response_body
+			duration_ms, status_code, success, request_url, request_method
 		FROM usage_records %s
 		ORDER BY %s %s
 		LIMIT ? OFFSET ?
@@ -625,7 +624,6 @@ func (s *Store) listUncached(ctx context.Context, query ListQuery) (*ListResult,
 		var r Record
 		var isStreaming, success int
 		var timestamp string
-		var reqHeadersJSON, respHeadersJSON string
 		var upstreamHasRetry int
 
 		err := rows.Scan(
@@ -634,7 +632,6 @@ func (s *Store) listUncached(ctx context.Context, query ListQuery) (*ListResult,
 			&isStreaming, &r.InputTokens,
 			&r.OutputTokens, &r.TotalTokens, &r.CachedTokens, &r.ReasoningTokens, &r.DurationMs, &r.StatusCode,
 			&success, &r.RequestURL, &r.RequestMethod,
-			&reqHeadersJSON, &r.RequestBody, &respHeadersJSON, &r.ResponseBody,
 		)
 		if err != nil {
 			log.WithError(err).Warn("failed to scan record")
@@ -653,14 +650,6 @@ func (s *Store) listUncached(ctx context.Context, query ListQuery) (*ListResult,
 		r.UpstreamHasRetry = upstreamHasRetry == 1
 		if r.UpstreamProvider == "" {
 			r.UpstreamProvider = r.Provider
-		}
-
-		// Parse headers JSON
-		if err := json.Unmarshal([]byte(reqHeadersJSON), &r.RequestHeaders); err != nil {
-			r.RequestHeaders = make(map[string]string)
-		}
-		if err := json.Unmarshal([]byte(respHeadersJSON), &r.ResponseHeaders); err != nil {
-			r.ResponseHeaders = make(map[string]string)
 		}
 
 		records = append(records, r)
