@@ -6,7 +6,6 @@ import (
 	"time"
 
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
-	log "github.com/sirupsen/logrus"
 )
 
 // CandidateHook records request routing attempts (provider + credential) into the usage record store.
@@ -71,12 +70,5 @@ func (CandidateHook) OnCandidate(ctx context.Context, candidate cliproxyauth.Can
 		RetryIndex:     candidate.RetryIndex,
 	}
 
-	go func() {
-		insertCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		if err := store.InsertRequestCandidate(insertCtx, record); err != nil {
-			log.WithError(err).Warn("failed to insert request candidate")
-		}
-	}()
+	store.EnqueueRequestCandidate(record)
 }
