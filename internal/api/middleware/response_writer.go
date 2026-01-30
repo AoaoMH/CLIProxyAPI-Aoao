@@ -80,15 +80,17 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(data)
 
 	// THEN: Handle logging based on response type
-	if w.isStreaming && w.chunkChannel != nil {
+	if w.isStreaming {
 		// Capture TTFB on first chunk (synchronous, before async channel send)
 		if w.firstChunkTimestamp.IsZero() {
 			w.firstChunkTimestamp = time.Now()
 		}
-		// For streaming responses: Send to async logging channel (non-blocking)
-		select {
-		case w.chunkChannel <- append([]byte(nil), data...): // Non-blocking send with copy
-		default: // Channel full, skip logging to avoid blocking
+		// For streaming responses: Send to async logging channel (non-blocking) when request logging is enabled.
+		if w.chunkChannel != nil {
+			select {
+			case w.chunkChannel <- append([]byte(nil), data...): // Non-blocking send with copy
+			default: // Channel full, skip logging to avoid blocking
+			}
 		}
 		// Also capture streaming body for usage record plugin (limited to prevent memory issues)
 		if w.streamingBody.Len() < 100000 { // Cap at 100KB
@@ -101,33 +103,17 @@ func (w *ResponseWriterWrapper) Write(data []byte) (int, error) {
 		return n, err
 	}
 
-	if w.shouldBufferResponseBody() {
-		w.body.Write(data)
-		// Update context in real-time so usage record plugin can access it
-		if w.ginCtx != nil {
-			w.ginCtx.Set("response_body_for_log", w.body.Bytes())
-		}
+	w.body.Write(data)
+	// Update context in real-time so usage record plugin can access it
+	if w.ginCtx != nil {
+		w.ginCtx.Set("response_body_for_log", w.body.Bytes())
 	}
 
 	return n, err
 }
 
 func (w *ResponseWriterWrapper) shouldBufferResponseBody() bool {
-	if w.logger != nil && w.logger.IsEnabled() {
-		return true
-	}
-	if !w.logOnErrorOnly {
-		return false
-	}
-	status := w.statusCode
-	if status == 0 {
-		if statusWriter, ok := w.ResponseWriter.(interface{ Status() int }); ok && statusWriter != nil {
-			status = statusWriter.Status()
-		} else {
-			status = http.StatusOK
-		}
-	}
-	return status >= http.StatusBadRequest
+	return true
 }
 
 // WriteString wraps the underlying ResponseWriter's WriteString method to capture response data.
@@ -140,14 +126,16 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 	n, err := w.ResponseWriter.WriteString(data)
 
 	// THEN: Capture for logging
-	if w.isStreaming && w.chunkChannel != nil {
+	if w.isStreaming {
 		// Capture TTFB on first chunk (synchronous, before async channel send)
 		if w.firstChunkTimestamp.IsZero() {
 			w.firstChunkTimestamp = time.Now()
 		}
-		select {
-		case w.chunkChannel <- []byte(data):
-		default:
+		if w.chunkChannel != nil {
+			select {
+			case w.chunkChannel <- []byte(data):
+			default:
+			}
 		}
 		// Also capture streaming body for usage record plugin (limited to prevent memory issues)
 		if w.streamingBody.Len() < 100000 { // Cap at 100KB
@@ -160,12 +148,10 @@ func (w *ResponseWriterWrapper) WriteString(data string) (int, error) {
 		return n, err
 	}
 
-	if w.shouldBufferResponseBody() {
-		w.body.WriteString(data)
-		// Update context in real-time so usage record plugin can access it
-		if w.ginCtx != nil {
-			w.ginCtx.Set("response_body_for_log", w.body.Bytes())
-		}
+	w.body.WriteString(data)
+	// Update context in real-time so usage record plugin can access it
+	if w.ginCtx != nil {
+		w.ginCtx.Set("response_body_for_log", w.body.Bytes())
 	}
 	return n, err
 }
@@ -182,6 +168,9 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 	// Detect streaming based on Content-Type
 	contentType := w.ResponseWriter.Header().Get("Content-Type")
 	w.isStreaming = w.detectStreaming(contentType)
+	if w.ginCtx != nil {
+		w.ginCtx.Set("is_streaming", w.isStreaming)
+	}
 
 	// If streaming, initialize streaming log writer
 	if w.isStreaming && w.logger.IsEnabled() {
@@ -216,6 +205,13 @@ func (w *ResponseWriterWrapper) WriteHeader(statusCode int) {
 func (w *ResponseWriterWrapper) ensureHeadersCaptured() {
 	// Always capture the current headers to ensure we have the latest state
 	w.captureCurrentHeaders()
+
+	// Keep streaming detection up-to-date even when handlers don't explicitly call WriteHeader().
+	contentType := w.ResponseWriter.Header().Get("Content-Type")
+	w.isStreaming = w.detectStreaming(contentType)
+	if w.ginCtx != nil {
+		w.ginCtx.Set("is_streaming", w.isStreaming)
+	}
 }
 
 // captureCurrentHeaders reads all headers from the underlying ResponseWriter and stores them
