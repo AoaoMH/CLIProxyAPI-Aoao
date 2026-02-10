@@ -207,28 +207,28 @@ func (h *Handler) PutAPIKeys(c *gin.Context) {
 	// Normalize entries
 	now := time.Now().UTC().Format(time.RFC3339)
 	seenKeys := make(map[string]bool)
+	normalized := make([]config.ApiKeyEntry, 0, len(entries))
 	for i := range entries {
-		entries[i].Key = strings.TrimSpace(entries[i].Key)
-		if entries[i].Key == "" {
+		entry := entries[i]
+		entry.Key = strings.TrimSpace(entry.Key)
+		if entry.Key == "" {
 			continue
 		}
-		// Check for duplicates within the input
-		if seenKeys[entries[i].Key] {
-			c.JSON(409, gin.H{"error": fmt.Sprintf("duplicate key: %s", entries[i].Key)})
+		if seenKeys[entry.Key] {
+			c.JSON(409, gin.H{"error": fmt.Sprintf("duplicate key: %s", entry.Key)})
 			return
 		}
-		seenKeys[entries[i].Key] = true
-		// Generate ID if not present
-		if entries[i].ID == "" {
-			entries[i].ID = uuid.New().String()
+		seenKeys[entry.Key] = true
+		if entry.ID == "" {
+			entry.ID = uuid.New().String()
 		}
-		if entries[i].CreatedAt == "" {
-			entries[i].CreatedAt = now
+		if entry.CreatedAt == "" {
+			entry.CreatedAt = now
 		}
+		normalized = append(normalized, entry)
 	}
 
-	h.cfg.APIKeys = entries
-	h.cfg.Access.Providers = nil
+	h.cfg.APIKeys = normalized
 	h.persist(c)
 }
 
@@ -282,7 +282,6 @@ func (h *Handler) PatchAPIKeys(c *gin.Context) {
 		// Update IsActive if provided
 		if body.IsActive != nil {
 			h.cfg.APIKeys[targetIndex].IsActive = *body.IsActive
-			h.cfg.Access.Providers = nil
 			modified = true
 		}
 
@@ -307,7 +306,6 @@ func (h *Handler) PatchAPIKeys(c *gin.Context) {
 				}
 			}
 			h.cfg.APIKeys[targetIndex].Key = newKey
-			h.cfg.Access.Providers = nil
 			modified = true
 		}
 
@@ -337,7 +335,6 @@ func (h *Handler) PatchAPIKeys(c *gin.Context) {
 			entry.ID = h.cfg.APIKeys[*body.Index].ID
 		}
 		h.cfg.APIKeys[*body.Index] = entry
-		h.cfg.Access.Providers = nil
 		h.persist(c)
 		return
 	}
@@ -360,7 +357,6 @@ func (h *Handler) PatchAPIKeys(c *gin.Context) {
 		for i := range h.cfg.APIKeys {
 			if h.cfg.APIKeys[i].Key == oldKey {
 				h.cfg.APIKeys[i].Key = newKey
-				h.cfg.Access.Providers = nil
 				h.persist(c)
 				return
 			}
@@ -373,7 +369,6 @@ func (h *Handler) PatchAPIKeys(c *gin.Context) {
 			IsActive:  true,
 			CreatedAt: now,
 		})
-		h.cfg.Access.Providers = nil
 		h.persist(c)
 		return
 	}
@@ -404,7 +399,6 @@ func (h *Handler) DeleteAPIKeys(c *gin.Context) {
 			return
 		}
 		h.cfg.APIKeys = out
-		h.cfg.Access.Providers = nil
 		h.persist(c)
 		return
 	}
@@ -414,7 +408,6 @@ func (h *Handler) DeleteAPIKeys(c *gin.Context) {
 		_, err := fmt.Sscanf(idxStr, "%d", &idx)
 		if err == nil && idx >= 0 && idx < len(h.cfg.APIKeys) {
 			h.cfg.APIKeys = append(h.cfg.APIKeys[:idx], h.cfg.APIKeys[idx+1:]...)
-			h.cfg.Access.Providers = nil
 			h.persist(c)
 			return
 		}
@@ -429,7 +422,6 @@ func (h *Handler) DeleteAPIKeys(c *gin.Context) {
 			}
 		}
 		h.cfg.APIKeys = out
-		h.cfg.Access.Providers = nil
 		h.persist(c)
 		return
 	}
@@ -442,7 +434,6 @@ func (h *Handler) DeleteAPIKeys(c *gin.Context) {
 			}
 		}
 		h.cfg.APIKeys = out
-		h.cfg.Access.Providers = nil
 		h.persist(c)
 		return
 	}
@@ -489,7 +480,6 @@ func (h *Handler) PostAPIKey(c *gin.Context) {
 		CreatedAt: now,
 	}
 	h.cfg.APIKeys = append(h.cfg.APIKeys, newEntry)
-	h.cfg.Access.Providers = nil
 
 	// Return the created entry with its ID
 	c.JSON(201, gin.H{"api-key": newEntry})

@@ -6,6 +6,8 @@ package config
 
 import (
 	"sync/atomic"
+
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 )
 
 // ApiKeyEntry represents an API key with extended metadata for management.
@@ -111,12 +113,11 @@ type SDKConfig struct {
 	// RequestLog enables or disables detailed request logging functionality.
 	RequestLog bool `yaml:"request-log" json:"request-log"`
 
+	Access sdkaccess.AccessConfig `yaml:"access,omitempty" json:"access,omitempty"`
+
 	// APIKeys is a list of keys for authenticating clients to this proxy server.
 	// Supports both simple string format (for backward compatibility) and extended ApiKeyEntry format.
 	APIKeys []ApiKeyEntry `yaml:"api-keys" json:"api-keys"`
-
-	// Access holds request authentication provider configuration.
-	Access AccessConfig `yaml:"auth,omitempty" json:"auth,omitempty"`
 
 	// Streaming configures server-side streaming behavior (keep-alives and safe bootstrap retries).
 	Streaming StreamingConfig `yaml:"streaming" json:"streaming"`
@@ -136,105 +137,4 @@ type StreamingConfig struct {
 	// to allow auth rotation / transient recovery.
 	// <= 0 disables bootstrap retries. Default is 0.
 	BootstrapRetries int `yaml:"bootstrap-retries,omitempty" json:"bootstrap-retries,omitempty"`
-}
-
-// AccessConfig groups request authentication providers.
-type AccessConfig struct {
-	// Providers lists configured authentication providers.
-	Providers []AccessProvider `yaml:"providers,omitempty" json:"providers,omitempty"`
-}
-
-// AccessProvider describes a request authentication provider entry.
-type AccessProvider struct {
-	// Name is the instance identifier for the provider.
-	Name string `yaml:"name" json:"name"`
-
-	// Type selects the provider implementation registered via the SDK.
-	Type string `yaml:"type" json:"type"`
-
-	// SDK optionally names a third-party SDK module providing this provider.
-	SDK string `yaml:"sdk,omitempty" json:"sdk,omitempty"`
-
-	// APIKeys lists inline keys for providers that require them.
-	APIKeys []string `yaml:"api-keys,omitempty" json:"api-keys,omitempty"`
-
-	// Config passes provider-specific options to the implementation.
-	Config map[string]any `yaml:"config,omitempty" json:"config,omitempty"`
-}
-
-const (
-	// AccessProviderTypeConfigAPIKey is the built-in provider validating inline API keys.
-	AccessProviderTypeConfigAPIKey = "config-api-key"
-
-	// DefaultAccessProviderName is applied when no provider name is supplied.
-	DefaultAccessProviderName = "config-inline"
-)
-
-// ConfigAPIKeyProvider returns the first inline API key provider if present.
-func (c *SDKConfig) ConfigAPIKeyProvider() *AccessProvider {
-	if c == nil {
-		return nil
-	}
-	for i := range c.Access.Providers {
-		if c.Access.Providers[i].Type == AccessProviderTypeConfigAPIKey {
-			if c.Access.Providers[i].Name == "" {
-				c.Access.Providers[i].Name = DefaultAccessProviderName
-			}
-			return &c.Access.Providers[i]
-		}
-	}
-	return nil
-}
-
-// MakeInlineAPIKeyProvider constructs an inline API key provider configuration.
-// It returns nil when no keys are supplied.
-func MakeInlineAPIKeyProvider(keys []ApiKeyEntry) *AccessProvider {
-	if len(keys) == 0 {
-		return nil
-	}
-	// Extract only active keys
-	activeKeys := make([]string, 0, len(keys))
-	for _, entry := range keys {
-		if entry.IsActive && entry.Key != "" {
-			activeKeys = append(activeKeys, entry.Key)
-		}
-	}
-	if len(activeKeys) == 0 {
-		return nil
-	}
-	provider := &AccessProvider{
-		Name:    DefaultAccessProviderName,
-		Type:    AccessProviderTypeConfigAPIKey,
-		APIKeys: activeKeys,
-	}
-	return provider
-}
-
-// ActiveAPIKeyStrings returns a slice of active API key strings from the APIKeys entries.
-// This is useful for backward compatibility with code expecting []string.
-func (c *SDKConfig) ActiveAPIKeyStrings() []string {
-	if c == nil || len(c.APIKeys) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(c.APIKeys))
-	for _, entry := range c.APIKeys {
-		if entry.IsActive && entry.Key != "" {
-			result = append(result, entry.Key)
-		}
-	}
-	return result
-}
-
-// AllAPIKeyStrings returns a slice of all API key strings from the APIKeys entries.
-func (c *SDKConfig) AllAPIKeyStrings() []string {
-	if c == nil || len(c.APIKeys) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(c.APIKeys))
-	for _, entry := range c.APIKeys {
-		if entry.Key != "" {
-			result = append(result, entry.Key)
-		}
-	}
-	return result
 }
