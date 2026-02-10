@@ -161,11 +161,8 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 		var chatCompletionsTools []interface{}
 
 		tools.ForEach(func(_, tool gjson.Result) bool {
-			// Built-in tools (e.g. {"type":"web_search"}) are already compatible with the Chat Completions schema.
-			// Only function tools need structural conversion because Chat Completions nests details under "function".
 			toolType := tool.Get("type").String()
-			if toolType != "" && toolType != "function" && tool.IsObject() {
-				chatCompletionsTools = append(chatCompletionsTools, tool.Value())
+			if toolType != "function" {
 				return true
 			}
 
@@ -206,7 +203,16 @@ func ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName string, inpu
 
 	// Convert tool_choice if present
 	if toolChoice := root.Get("tool_choice"); toolChoice.Exists() {
-		out, _ = sjson.Set(out, "tool_choice", toolChoice.String())
+		if toolChoice.IsObject() {
+			if toolChoice.Get("type").Exists() && toolChoice.Get("type").String() != "function" {
+				return []byte(out)
+			}
+			out, _ = sjson.SetRaw(out, "tool_choice", toolChoice.Raw)
+		} else if toolChoice.IsArray() {
+			out, _ = sjson.SetRaw(out, "tool_choice", toolChoice.Raw)
+		} else {
+			out, _ = sjson.Set(out, "tool_choice", toolChoice.String())
+		}
 	}
 
 	return []byte(out)
