@@ -30,8 +30,9 @@ type ProviderExecutor interface {
 	Identifier() string
 	// Execute handles non-streaming execution and returns the provider response payload.
 	Execute(ctx context.Context, auth *Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error)
-	// ExecuteStream handles streaming execution and returns a channel of provider chunks.
-	ExecuteStream(ctx context.Context, auth *Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error)
+	// ExecuteStream handles streaming execution and returns a StreamResult containing
+	// upstream headers and a channel of provider chunks.
+	ExecuteStream(ctx context.Context, auth *Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error)
 	// Refresh attempts to refresh provider credentials and returns the updated auth state.
 	Refresh(ctx context.Context, auth *Auth) (*Auth, error)
 	// CountTokens returns the token count for the given request.
@@ -633,7 +634,7 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 
 // ExecuteStream performs a streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model and round-robins the starting provider per model.
-func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (<-chan cliproxyexecutor.StreamChunk, error) {
+func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
 	normalized := m.normalizeProviders(providers)
 	if len(normalized) == 0 {
 		return nil, &Error{Code: "provider_not_found", Message: "no provider supplied"}
@@ -644,9 +645,9 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 	trace := &candidateTrace{}
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		chunks, errStream := m.executeStreamMixedOnce(ctx, normalized, req, opts, trace)
+		result, errStream := m.executeStreamMixedOnce(ctx, normalized, req, opts, trace)
 		if errStream == nil {
-			return chunks, nil
+			return result, nil
 		}
 		lastErr = errStream
 		wait, shouldRetry := m.shouldRetryAfterError(errStream, attempt, normalized, req.Model, maxWait)
@@ -859,7 +860,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	}
 }
 
-func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, trace *candidateTrace) (<-chan cliproxyexecutor.StreamChunk, error) {
+func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, trace *candidateTrace) (*cliproxyexecutor.StreamResult, error) {
 	if len(providers) == 0 {
 		return nil, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
@@ -904,7 +905,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			authFile = filepath.Base(authFile)
 		}
 		startedAt := time.Now()
-		chunks, errStream := executor.ExecuteStream(execCtx, auth, execReq, opts)
+		streamResult, errStream := executor.ExecuteStream(execCtx, auth, execReq, opts)
 		if errStream != nil {
 			if errCtx := execCtx.Err(); errCtx != nil {
 				return nil, errCtx
@@ -993,7 +994,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			traceCandidate.StatusCode = 200
 			traceCandidate.ErrorMessage = ""
 			m.hook.OnCandidate(streamCtx, traceCandidate)
-		}(execCtx, auth.Clone(), provider, chunks, Candidate{
+		}(execCtx, auth.Clone(), provider, streamResult.Chunks, Candidate{
 			RequestID:      requestID,
 			Provider:       provider,
 			AuthID:         auth.ID,
@@ -1006,7 +1007,10 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			CandidateIndex: candidateIndex,
 			RetryIndex:     retryIndex,
 		}, startedAt)
-		return out, nil
+		return &cliproxyexecutor.StreamResult{
+			Headers: streamResult.Headers,
+			Chunks:  out,
+		}, nil
 	}
 }
 
