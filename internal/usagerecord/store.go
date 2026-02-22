@@ -1223,6 +1223,8 @@ type UsageKPIs struct {
 
 	RPM int64 `json:"rpm"`
 	TPM int64 `json:"tpm"`
+	RPD int64 `json:"rpd"`
+	TPD int64 `json:"tpd"`
 
 	TrendBucket   string          `json:"trend_bucket"` // hour | day
 	RequestsTrend []KPITrendPoint `json:"requests_trend"`
@@ -1445,6 +1447,29 @@ func (s *Store) getUsageKPIsUncached(ctx context.Context, whereClause string, wh
 	tpmQuery := fmt.Sprintf(`SELECT COALESCE(SUM(input_tokens + output_tokens + cached_tokens + reasoning_tokens), 0) FROM usage_records %s`, rpmClause)
 	if err := s.db.QueryRowContext(ctx, tpmQuery, rpmArgs...).Scan(&kpis.TPM); err != nil {
 		return nil, fmt.Errorf("failed to query tpm: %w", err)
+	}
+
+	// RPD/TPD: based on the last 24 hours up to endTime (or now if endTime not provided).
+	dayWindow := 24 * time.Hour
+	dayStart := windowEnd.Add(-dayWindow)
+
+	dayClause := strings.TrimSpace(kpiWhereClause)
+	dayArgs := append([]interface{}{}, whereArgs...)
+	if dayClause == "" {
+		dayClause = "WHERE timestamp >= ? AND timestamp <= ?"
+	} else {
+		dayClause = dayClause + " AND timestamp >= ? AND timestamp <= ?"
+	}
+	dayArgs = append(dayArgs, dayStart.Format(time.RFC3339), windowEnd.Format(time.RFC3339))
+
+	rpdQuery := fmt.Sprintf(`SELECT COUNT(*) FROM usage_records %s`, dayClause)
+	if err := s.db.QueryRowContext(ctx, rpdQuery, dayArgs...).Scan(&kpis.RPD); err != nil {
+		return nil, fmt.Errorf("failed to query rpd: %w", err)
+	}
+
+	tpdQuery := fmt.Sprintf(`SELECT COALESCE(SUM(input_tokens + output_tokens + cached_tokens + reasoning_tokens), 0) FROM usage_records %s`, dayClause)
+	if err := s.db.QueryRowContext(ctx, tpdQuery, dayArgs...).Scan(&kpis.TPD); err != nil {
+		return nil, fmt.Errorf("failed to query tpd: %w", err)
 	}
 
 	// RPM/TPM trend: last 60 minutes (per minute buckets).
