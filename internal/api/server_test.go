@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,7 +12,6 @@ import (
 	gin "github.com/gin-gonic/gin"
 	proxyconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/usagerecord"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
@@ -32,7 +30,7 @@ func newTestServer(t *testing.T) *Server {
 
 	cfg := &proxyconfig.Config{
 		SDKConfig: sdkconfig.SDKConfig{
-			APIKeys: []sdkconfig.ApiKeyEntry{{Key: "test-key", IsActive: true}},
+			APIKeys: []string{"test-key"},
 		},
 		Port:                   0,
 		AuthDir:                authDir,
@@ -45,12 +43,7 @@ func newTestServer(t *testing.T) *Server {
 	accessManager := sdkaccess.NewManager()
 
 	configPath := filepath.Join(tmpDir, "config.yaml")
-	server := NewServer(cfg, authManager, accessManager, configPath)
-	t.Cleanup(func() {
-		_ = server.Stop(context.Background())
-		_ = usagerecord.CloseDefaultStore()
-	})
-	return server
+	return NewServer(cfg, authManager, accessManager, configPath)
 }
 
 func TestAmpProviderModelRoutes(t *testing.T) {

@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	DefaultPanelGitHubRepository = "https://github.com/AoaoMH/CLIProxyAPIPanel"
+	DefaultPanelGitHubRepository = "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
 	DefaultPprofAddr             = "127.0.0.1:8316"
 )
 
@@ -63,10 +63,6 @@ type Config struct {
 
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
-
-	// UsageRecordsRetentionDays controls how long the usage records SQLite database keeps data.
-	// Default: 30 days. Set to 0 to keep forever (disable cleanup).
-	UsageRecordsRetentionDays int `yaml:"usage-records-retention-days" json:"usage-records-retention-days"`
 
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
@@ -320,9 +316,6 @@ type ClaudeKey struct {
 	// APIKey is the authentication key for accessing Claude API services.
 	APIKey string `yaml:"api-key" json:"api-key"`
 
-	// Disabled indicates whether this credential is intentionally disabled.
-	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
-
 	// Priority controls selection preference when multiple credentials match.
 	// Higher values are preferred; defaults to 0.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
@@ -371,9 +364,6 @@ type CodexKey struct {
 	// APIKey is the authentication key for accessing Codex API services.
 	APIKey string `yaml:"api-key" json:"api-key"`
 
-	// Disabled indicates whether this credential is intentionally disabled.
-	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
-
 	// Priority controls selection preference when multiple credentials match.
 	// Higher values are preferred; defaults to 0.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
@@ -421,9 +411,6 @@ func (m CodexModel) GetAlias() string { return m.Alias }
 type GeminiKey struct {
 	// APIKey is the authentication key for accessing Gemini API services.
 	APIKey string `yaml:"api-key" json:"api-key"`
-
-	// Disabled indicates whether this credential is intentionally disabled.
-	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 
 	// Priority controls selection preference when multiple credentials match.
 	// Higher values are preferred; defaults to 0.
@@ -554,7 +541,6 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.LogsMaxTotalSizeMB = 0
 	cfg.ErrorLogsMaxFiles = 10
 	cfg.UsageStatisticsEnabled = false
-	cfg.UsageRecordsRetentionDays = 30
 	cfg.DisableCooling = false
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr
@@ -610,9 +596,6 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	if cfg.LogsMaxTotalSizeMB < 0 {
 		cfg.LogsMaxTotalSizeMB = 0
-	}
-	if cfg.UsageRecordsRetentionDays < 0 {
-		cfg.UsageRecordsRetentionDays = 0
 	}
 
 	if cfg.ErrorLogsMaxFiles < 0 {

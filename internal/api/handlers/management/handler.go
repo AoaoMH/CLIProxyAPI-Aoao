@@ -15,7 +15,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -133,44 +132,6 @@ func (h *Handler) SetLogDirectory(dir string) {
 // SetPostAuthHook registers a hook to be called after auth record creation but before persistence.
 func (h *Handler) SetPostAuthHook(hook coreauth.PostAuthHook) {
 	h.postAuthHook = hook
-}
-
-// UpdateWebUI handles WebUI update requests
-func (h *Handler) UpdateWebUI(c *gin.Context) {
-	var body struct {
-		Version string `json:"version"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
-		return
-	}
-
-	// version parameter is accepted but currently we always fetch the latest release
-	_ = body.Version
-
-	// Force update the management asset
-	staticDir := managementasset.StaticDir(h.configFilePath)
-	if staticDir == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "static directory not configured"})
-		return
-	}
-
-	// Use ForceUpdateManagementHTML for immediate, guaranteed update
-	ctx := c.Request.Context()
-	newHash, err := managementasset.ForceUpdateManagementHTML(ctx, staticDir, h.cfg.ProxyURL, h.cfg.RemoteManagement.PanelGitHubRepository)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":  fmt.Sprintf("WebUI update failed: %v", err),
-			"status": "error",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"status":  "ok",
-		"message": "WebUI updated successfully",
-		"hash":    newHash,
-	})
 }
 
 // Middleware enforces access control for management endpoints.

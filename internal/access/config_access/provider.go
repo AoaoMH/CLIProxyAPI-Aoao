@@ -117,17 +117,14 @@ func extractBearerToken(header string) string {
 	return strings.TrimSpace(parts[1])
 }
 
-func normalizeKeys(entries []sdkconfig.ApiKeyEntry) []string {
-	if len(entries) == 0 {
+func normalizeKeys(keys []string) []string {
+	if len(keys) == 0 {
 		return nil
 	}
-	normalized := make([]string, 0, len(entries))
-	seen := make(map[string]struct{}, len(entries))
-	for _, entry := range entries {
-		if !entry.IsActive {
-			continue
-		}
-		trimmedKey := strings.TrimSpace(entry.Key)
+	normalized := make([]string, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		trimmedKey := strings.TrimSpace(key)
 		if trimmedKey == "" {
 			continue
 		}

@@ -1,16 +1,12 @@
 package management
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/usagerecord"
 )
 
 // Generic helpers for list[string]
@@ -108,416 +104,18 @@ func (h *Handler) deleteFromStringList(c *gin.Context, target *[]string, after f
 	c.JSON(400, gin.H{"error": "missing index or value"})
 }
 
-// apiKeyResponse is a DTO for API key responses (avoids copying mutex from config.ApiKeyEntry)
-type apiKeyResponse struct {
-	ID           string `json:"id,omitempty"`
-	Key          string `json:"api-key"`
-	Name         string `json:"name,omitempty"`
-	IsActive     bool   `json:"is-active"`
-	UsageCount   int64  `json:"usage-count,omitempty"`
-	InputTokens  int64  `json:"input-tokens,omitempty"`
-	OutputTokens int64  `json:"output-tokens,omitempty"`
-	LastUsedAt   string `json:"last-used-at,omitempty"`
-	CreatedAt    string `json:"created-at,omitempty"`
-}
-
 // api-keys
-func (h *Handler) GetAPIKeys(c *gin.Context) {
-	// Get persistent stats from SQLite database
-	var persistentStats map[string]*usagerecord.APIKeyStats
-	if store := usagerecord.DefaultStore(); store != nil {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-		defer cancel()
-		var err error
-		persistentStats, err = store.GetAPIKeyStats(ctx)
-		if err != nil {
-			// Log error but continue with empty stats
-			c.Error(err)
-		}
-	}
-
-	// Build response DTOs (avoids copying mutex from config.ApiKeyEntry)
-	apiKeys := make([]apiKeyResponse, len(h.cfg.APIKeys))
-	for i, entry := range h.cfg.APIKeys {
-		apiKeys[i] = apiKeyResponse{
-			ID:         entry.ID,
-			Key:        entry.Key,
-			Name:       entry.Name,
-			IsActive:   entry.IsActive,
-			CreatedAt:  entry.CreatedAt,
-			LastUsedAt: entry.LastUsedAt,
-		}
-		// Merge persistent stats from SQLite if available
-		if stats, ok := persistentStats[entry.Key]; ok {
-			// Use persistent stats (from DB) as the source of truth
-			apiKeys[i].UsageCount = stats.UsageCount
-			apiKeys[i].InputTokens = stats.InputTokens
-			apiKeys[i].OutputTokens = stats.OutputTokens
-			if stats.LastUsedAt != "" {
-				apiKeys[i].LastUsedAt = stats.LastUsedAt
-			}
-		}
-	}
-
-	c.JSON(200, gin.H{"api-keys": apiKeys})
-}
-
+func (h *Handler) GetAPIKeys(c *gin.Context) { c.JSON(200, gin.H{"api-keys": h.cfg.APIKeys}) }
 func (h *Handler) PutAPIKeys(c *gin.Context) {
-	data, err := c.GetRawData()
-	if err != nil {
-		c.JSON(400, gin.H{"error": "failed to read body"})
-		return
-	}
-
-	// Try to parse as []ApiKeyEntry first
-	var entries []config.ApiKeyEntry
-	if err = json.Unmarshal(data, &entries); err != nil {
-		// Try wrapped format
-		var obj struct {
-			Items []config.ApiKeyEntry `json:"items"`
-		}
-		if err2 := json.Unmarshal(data, &obj); err2 == nil && len(obj.Items) > 0 {
-			entries = obj.Items
-		} else {
-			// Fallback: try to parse as []string for backward compatibility
-			var strArr []string
-			if err3 := json.Unmarshal(data, &strArr); err3 != nil {
-				var strObj struct {
-					Items []string `json:"items"`
-				}
-				if err4 := json.Unmarshal(data, &strObj); err4 != nil || len(strObj.Items) == 0 {
-					c.JSON(400, gin.H{"error": "invalid body"})
-					return
-				}
-				strArr = strObj.Items
-			}
-			// Convert strings to ApiKeyEntry
-			now := time.Now().UTC().Format(time.RFC3339)
-			entries = make([]config.ApiKeyEntry, len(strArr))
-			for i, key := range strArr {
-				entries[i] = config.ApiKeyEntry{
-					Key:       strings.TrimSpace(key),
-					IsActive:  true,
-					CreatedAt: now,
-				}
-			}
-		}
-	}
-
-	// Normalize entries
-	now := time.Now().UTC().Format(time.RFC3339)
-	seenKeys := make(map[string]bool)
-	normalized := make([]config.ApiKeyEntry, 0, len(entries))
-	for i := range entries {
-		entry := entries[i]
-		entry.Key = strings.TrimSpace(entry.Key)
-		if entry.Key == "" {
-			continue
-		}
-		if seenKeys[entry.Key] {
-			c.JSON(409, gin.H{"error": fmt.Sprintf("duplicate key: %s", entry.Key)})
-			return
-		}
-		seenKeys[entry.Key] = true
-		if entry.ID == "" {
-			entry.ID = uuid.New().String()
-		}
-		if entry.CreatedAt == "" {
-			entry.CreatedAt = now
-		}
-		normalized = append(normalized, entry)
-	}
-
-	h.cfg.APIKeys = normalized
-	h.persist(c)
+	h.putStringList(c, func(v []string) {
+		h.cfg.APIKeys = append([]string(nil), v...)
+	}, nil)
 }
-
 func (h *Handler) PatchAPIKeys(c *gin.Context) {
-	var body struct {
-		// Primary lookup: by ID (preferred)
-		ID *string `json:"id"`
-		// Fallback lookup: by key value
-		Key *string `json:"key"`
-		// For updating by old/new key value (backward compatible)
-		Old *string `json:"old"`
-		New *string `json:"new"`
-		// For updating by index (deprecated, but kept for compatibility)
-		Index *int                `json:"index"`
-		Value *config.ApiKeyEntry `json:"value"`
-		// Partial update fields (use pointers to distinguish nil from zero value)
-		IsActive *bool   `json:"is-active"`
-		Name     *string `json:"name"`
-		APIKey   *string `json:"api-key"` // For updating the key value itself
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(400, gin.H{"error": "invalid body"})
-		return
-	}
-
-	// Find target entry by ID or Key
-	targetIndex := -1
-	if body.ID != nil && *body.ID != "" {
-		id := strings.TrimSpace(*body.ID)
-		for i := range h.cfg.APIKeys {
-			if h.cfg.APIKeys[i].ID == id {
-				targetIndex = i
-				break
-			}
-		}
-	}
-	if targetIndex == -1 && body.Key != nil && *body.Key != "" {
-		key := strings.TrimSpace(*body.Key)
-		for i := range h.cfg.APIKeys {
-			if h.cfg.APIKeys[i].Key == key {
-				targetIndex = i
-				break
-			}
-		}
-	}
-
-	// Handle partial updates if target found
-	if targetIndex >= 0 {
-		modified := false
-
-		// Update IsActive if provided
-		if body.IsActive != nil {
-			h.cfg.APIKeys[targetIndex].IsActive = *body.IsActive
-			modified = true
-		}
-
-		// Update Name if provided
-		if body.Name != nil {
-			h.cfg.APIKeys[targetIndex].Name = strings.TrimSpace(*body.Name)
-			modified = true
-		}
-
-		// Update Key value if provided (with uniqueness check)
-		if body.APIKey != nil {
-			newKey := strings.TrimSpace(*body.APIKey)
-			if newKey == "" {
-				c.JSON(400, gin.H{"error": "api-key cannot be empty"})
-				return
-			}
-			// Check for duplicate
-			for i, entry := range h.cfg.APIKeys {
-				if i != targetIndex && entry.Key == newKey {
-					c.JSON(409, gin.H{"error": "key already exists"})
-					return
-				}
-			}
-			h.cfg.APIKeys[targetIndex].Key = newKey
-			modified = true
-		}
-
-		if modified {
-			h.persist(c)
-			return
-		}
-	}
-
-	// Update by index with full value (legacy support)
-	if body.Index != nil && body.Value != nil && *body.Index >= 0 && *body.Index < len(h.cfg.APIKeys) {
-		entry := *body.Value
-		entry.Key = strings.TrimSpace(entry.Key)
-		if entry.Key == "" {
-			c.JSON(400, gin.H{"error": "key cannot be empty"})
-			return
-		}
-		// Check for duplicate key (excluding current index)
-		for i, existing := range h.cfg.APIKeys {
-			if i != *body.Index && existing.Key == entry.Key {
-				c.JSON(409, gin.H{"error": "key already exists"})
-				return
-			}
-		}
-		// Preserve ID if not provided
-		if entry.ID == "" {
-			entry.ID = h.cfg.APIKeys[*body.Index].ID
-		}
-		h.cfg.APIKeys[*body.Index] = entry
-		h.persist(c)
-		return
-	}
-
-	// Update by old/new key value (backward compatible)
-	if body.Old != nil && body.New != nil {
-		oldKey := strings.TrimSpace(*body.Old)
-		newKey := strings.TrimSpace(*body.New)
-		if newKey == "" {
-			c.JSON(400, gin.H{"error": "new key cannot be empty"})
-			return
-		}
-		// Check for duplicate
-		for _, entry := range h.cfg.APIKeys {
-			if entry.Key == newKey && entry.Key != oldKey {
-				c.JSON(409, gin.H{"error": "key already exists"})
-				return
-			}
-		}
-		for i := range h.cfg.APIKeys {
-			if h.cfg.APIKeys[i].Key == oldKey {
-				h.cfg.APIKeys[i].Key = newKey
-				h.persist(c)
-				return
-			}
-		}
-		// Key not found, add as new entry
-		now := time.Now().UTC().Format(time.RFC3339)
-		h.cfg.APIKeys = append(h.cfg.APIKeys, config.ApiKeyEntry{
-			ID:        uuid.New().String(),
-			Key:       newKey,
-			IsActive:  true,
-			CreatedAt: now,
-		})
-		h.persist(c)
-		return
-	}
-
-	// If we had a target but no updates, or no target at all
-	if targetIndex == -1 && (body.ID != nil || body.Key != nil) {
-		c.JSON(404, gin.H{"error": "key not found"})
-		return
-	}
-
-	c.JSON(400, gin.H{"error": "missing fields"})
+	h.patchStringList(c, &h.cfg.APIKeys, func() {})
 }
-
 func (h *Handler) DeleteAPIKeys(c *gin.Context) {
-	// Delete by ID (preferred)
-	if id := strings.TrimSpace(c.Query("id")); id != "" {
-		out := make([]config.ApiKeyEntry, 0, len(h.cfg.APIKeys))
-		found := false
-		for _, entry := range h.cfg.APIKeys {
-			if entry.ID != id {
-				out = append(out, entry)
-			} else {
-				found = true
-			}
-		}
-		if !found {
-			c.JSON(404, gin.H{"error": "key not found"})
-			return
-		}
-		h.cfg.APIKeys = out
-		h.persist(c)
-		return
-	}
-	// Delete by index (legacy)
-	if idxStr := c.Query("index"); idxStr != "" {
-		var idx int
-		_, err := fmt.Sscanf(idxStr, "%d", &idx)
-		if err == nil && idx >= 0 && idx < len(h.cfg.APIKeys) {
-			h.cfg.APIKeys = append(h.cfg.APIKeys[:idx], h.cfg.APIKeys[idx+1:]...)
-			h.persist(c)
-			return
-		}
-		c.JSON(400, gin.H{"error": "invalid index"})
-		return
-	}
-	if val := strings.TrimSpace(c.Query("value")); val != "" {
-		out := make([]config.ApiKeyEntry, 0, len(h.cfg.APIKeys))
-		for _, entry := range h.cfg.APIKeys {
-			if strings.TrimSpace(entry.Key) != val {
-				out = append(out, entry)
-			}
-		}
-		h.cfg.APIKeys = out
-		h.persist(c)
-		return
-	}
-	// Also support api-key query param for consistency
-	if val := strings.TrimSpace(c.Query("api-key")); val != "" {
-		out := make([]config.ApiKeyEntry, 0, len(h.cfg.APIKeys))
-		for _, entry := range h.cfg.APIKeys {
-			if entry.Key != val {
-				out = append(out, entry)
-			}
-		}
-		h.cfg.APIKeys = out
-		h.persist(c)
-		return
-	}
-	c.JSON(400, gin.H{"error": "missing id, index, value, or api-key"})
-}
-
-// PostAPIKey adds a new API key entry
-func (h *Handler) PostAPIKey(c *gin.Context) {
-	var body struct {
-		APIKey string `json:"api-key"`
-		Name   string `json:"name"`
-		Label  string `json:"label"` // Alias for name
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(400, gin.H{"error": "invalid body"})
-		return
-	}
-
-	key := strings.TrimSpace(body.APIKey)
-	if key == "" {
-		c.JSON(400, gin.H{"error": "api-key is required"})
-		return
-	}
-
-	// Check for duplicate
-	for _, entry := range h.cfg.APIKeys {
-		if entry.Key == key {
-			c.JSON(409, gin.H{"error": "key already exists"})
-			return
-		}
-	}
-
-	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		name = strings.TrimSpace(body.Label)
-	}
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	newEntry := config.ApiKeyEntry{
-		ID:        uuid.New().String(),
-		Key:       key,
-		Name:      name,
-		IsActive:  true,
-		CreatedAt: now,
-	}
-	h.cfg.APIKeys = append(h.cfg.APIKeys, newEntry)
-
-	// Return the created entry with its ID
-	c.JSON(201, gin.H{"api-key": newEntry})
-}
-
-// IncrementAPIKeyUsage atomically increments the usage count for an API key.
-// This is thread-safe and can be called concurrently.
-func (h *Handler) IncrementAPIKeyUsage(key string) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	for i := range h.cfg.APIKeys {
-		if h.cfg.APIKeys[i].Key == key {
-			h.cfg.APIKeys[i].IncrementUsage(now)
-			return
-		}
-	}
-}
-
-// IncrementAPIKeyUsageByID atomically increments the usage count for an API key by ID.
-// This is the preferred method as it uses stable identifiers.
-func (h *Handler) IncrementAPIKeyUsageByID(id string) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	for i := range h.cfg.APIKeys {
-		if h.cfg.APIKeys[i].ID == id {
-			h.cfg.APIKeys[i].IncrementUsage(now)
-			return
-		}
-	}
-}
-
-// IncrementAPIKeyTokens atomically increments the token counts for an API key.
-// It looks up the key by its value and increments both input and output token counts.
-func (h *Handler) IncrementAPIKeyTokens(apiKey string, inputTokens, outputTokens int64) {
-	for i := range h.cfg.APIKeys {
-		if h.cfg.APIKeys[i].Key == apiKey {
-			h.cfg.APIKeys[i].IncrementTokens(inputTokens, outputTokens)
-			return
-		}
-	}
+	h.deleteFromStringList(c, &h.cfg.APIKeys, func() {})
 }
 
 // gemini-api-key: []GeminiKey
@@ -548,7 +146,6 @@ func (h *Handler) PutGeminiKeys(c *gin.Context) {
 func (h *Handler) PatchGeminiKey(c *gin.Context) {
 	type geminiKeyPatch struct {
 		APIKey         *string            `json:"api-key"`
-		Disabled       *bool              `json:"disabled"`
 		Prefix         *string            `json:"prefix"`
 		BaseURL        *string            `json:"base-url"`
 		ProxyURL       *string            `json:"proxy-url"`
@@ -597,9 +194,6 @@ func (h *Handler) PatchGeminiKey(c *gin.Context) {
 	}
 	if body.Value.Prefix != nil {
 		entry.Prefix = strings.TrimSpace(*body.Value.Prefix)
-	}
-	if body.Value.Disabled != nil {
-		entry.Disabled = *body.Value.Disabled
 	}
 	if body.Value.BaseURL != nil {
 		entry.BaseURL = strings.TrimSpace(*body.Value.BaseURL)
@@ -678,7 +272,6 @@ func (h *Handler) PutClaudeKeys(c *gin.Context) {
 func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	type claudeKeyPatch struct {
 		APIKey         *string               `json:"api-key"`
-		Disabled       *bool                 `json:"disabled"`
 		Prefix         *string               `json:"prefix"`
 		BaseURL        *string               `json:"base-url"`
 		ProxyURL       *string               `json:"proxy-url"`
@@ -719,9 +312,6 @@ func (h *Handler) PatchClaudeKey(c *gin.Context) {
 	}
 	if body.Value.Prefix != nil {
 		entry.Prefix = strings.TrimSpace(*body.Value.Prefix)
-	}
-	if body.Value.Disabled != nil {
-		entry.Disabled = *body.Value.Disabled
 	}
 	if body.Value.BaseURL != nil {
 		entry.BaseURL = strings.TrimSpace(*body.Value.BaseURL)
@@ -927,7 +517,6 @@ func (h *Handler) PutVertexCompatKeys(c *gin.Context) {
 func (h *Handler) PatchVertexCompatKey(c *gin.Context) {
 	type vertexCompatPatch struct {
 		APIKey   *string                     `json:"api-key"`
-		Disabled *bool                       `json:"disabled"`
 		Prefix   *string                     `json:"prefix"`
 		BaseURL  *string                     `json:"base-url"`
 		ProxyURL *string                     `json:"proxy-url"`
@@ -976,9 +565,6 @@ func (h *Handler) PatchVertexCompatKey(c *gin.Context) {
 	}
 	if body.Value.Prefix != nil {
 		entry.Prefix = strings.TrimSpace(*body.Value.Prefix)
-	}
-	if body.Value.Disabled != nil {
-		entry.Disabled = *body.Value.Disabled
 	}
 	if body.Value.BaseURL != nil {
 		trimmed := strings.TrimSpace(*body.Value.BaseURL)
@@ -1251,7 +837,6 @@ func (h *Handler) PutCodexKeys(c *gin.Context) {
 func (h *Handler) PatchCodexKey(c *gin.Context) {
 	type codexKeyPatch struct {
 		APIKey         *string              `json:"api-key"`
-		Disabled       *bool                `json:"disabled"`
 		Prefix         *string              `json:"prefix"`
 		BaseURL        *string              `json:"base-url"`
 		ProxyURL       *string              `json:"proxy-url"`
@@ -1292,9 +877,6 @@ func (h *Handler) PatchCodexKey(c *gin.Context) {
 	}
 	if body.Value.Prefix != nil {
 		entry.Prefix = strings.TrimSpace(*body.Value.Prefix)
-	}
-	if body.Value.Disabled != nil {
-		entry.Disabled = *body.Value.Disabled
 	}
 	if body.Value.BaseURL != nil {
 		trimmed := strings.TrimSpace(*body.Value.BaseURL)

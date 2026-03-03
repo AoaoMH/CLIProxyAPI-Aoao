@@ -41,13 +41,12 @@ func DoIFlowCookieAuth(cfg *config.Config, options *LoginOptions) {
 
 	// Check for duplicate BXAuth before authentication
 	bxAuth := iflow.ExtractBXAuth(cookie)
-	overwritePath := ""
 	if existingFile, err := iflow.CheckDuplicateBXAuth(cfg.AuthDir, bxAuth); err != nil {
 		fmt.Printf("Failed to check duplicate: %v\n", err)
 		return
 	} else if existingFile != "" {
-		fmt.Printf("Duplicate BXAuth found, overwriting existing authentication: %s\n", filepath.Base(existingFile))
-		overwritePath = existingFile
+		fmt.Printf("Duplicate BXAuth found, authentication already exists: %s\n", filepath.Base(existingFile))
+		return
 	}
 
 	// Authenticate with cookie
@@ -64,10 +63,7 @@ func DoIFlowCookieAuth(cfg *config.Config, options *LoginOptions) {
 	tokenStorage := auth.CreateCookieTokenStorage(tokenData)
 
 	// Get auth file path using email in filename
-	authFilePath := strings.TrimSpace(overwritePath)
-	if authFilePath == "" {
-		authFilePath = getAuthFilePath(cfg, "iflow", tokenData.Email)
-	}
+	authFilePath := getAuthFilePath(cfg, "iflow", tokenData.Email)
 
 	// Save token to file
 	if err := tokenStorage.SaveTokenToFile(authFilePath); err != nil {

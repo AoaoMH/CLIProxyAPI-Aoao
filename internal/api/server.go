@@ -28,7 +28,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/usagerecord"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/api/handlers"
@@ -177,8 +176,6 @@ type Server struct {
 	keepAliveOnTimeout func()
 	keepAliveHeartbeat chan struct{}
 	keepAliveStop      chan struct{}
-
-	usageRecordCleaner *usagerecord.RetentionCleaner
 }
 
 // NewServer creates and initializes a new API server instance.
@@ -212,7 +209,6 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// Add middleware
 	engine.Use(logging.GinLogrusLogger())
 	engine.Use(logging.GinLogrusRecovery())
-	engine.Use(usagerecord.GinUsageRecordMiddleware())
 	for _, mw := range optionState.extraMiddleware {
 		engine.Use(mw)
 	}
@@ -276,29 +272,6 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		s.mgmt.SetPostAuthHook(optionState.postAuthHook)
 	}
 	s.localPassword = optionState.localPassword
-
-	usageSnapshotPath := filepath.Join(logDir, "usage_snapshot.json")
-	if err := usage.LoadSnapshotInto(usage.GetRequestStatistics(), usageSnapshotPath); err != nil {
-		log.WithError(err).Warn("failed to load usage statistics snapshot")
-	}
-	usage.StartSnapshotPersistence(usage.GetRequestStatistics(), usageSnapshotPath, 1*time.Minute)
-
-	// Initialize usage records SQLite storage
-	if err := usagerecord.InitDefaultStore(logDir); err != nil {
-		log.WithError(err).Warn("failed to initialize usage record store")
-	} else {
-		usagerecord.SetStore(usagerecord.DefaultStore())
-		usagerecord.Register()
-		// Set callback to increment API key token counts on each usage record
-		usagerecord.SetTokenIncrementor(s.mgmt.IncrementAPIKeyTokens)
-		// Set callback to increment API key usage count and last used time
-		usagerecord.SetUsageIncrementor(s.mgmt.IncrementAPIKeyUsage)
-		// Enable request trace timeline recording (provider + credential path).
-		if authManager != nil {
-			authManager.SetHook(usagerecord.NewCandidateHook())
-		}
-	}
-	s.configureUsageRecordRetention(cfg)
 
 	// Setup routes
 	s.setupRoutes()
@@ -521,9 +494,6 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
 		mgmt.GET("/latest-version", s.mgmt.GetLatestVersion)
 
-		// WebUI update endpoint
-		mgmt.POST("/webui/update", s.mgmt.UpdateWebUI)
-
 		mgmt.GET("/debug", s.mgmt.GetDebug)
 		mgmt.PUT("/debug", s.mgmt.PutDebug)
 		mgmt.PATCH("/debug", s.mgmt.PutDebug)
@@ -560,7 +530,6 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
 
 		mgmt.GET("/api-keys", s.mgmt.GetAPIKeys)
-		mgmt.POST("/api-keys", s.mgmt.PostAPIKey)
 		mgmt.PUT("/api-keys", s.mgmt.PutAPIKeys)
 		mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
 		mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
@@ -657,7 +626,6 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/auth-files/download", s.mgmt.DownloadAuthFile)
 		mgmt.POST("/auth-files", s.mgmt.UploadAuthFile)
 		mgmt.DELETE("/auth-files", s.mgmt.DeleteAuthFile)
-		mgmt.PATCH("/auth-files/metadata", s.mgmt.PatchAuthFileMetadata)
 		mgmt.PATCH("/auth-files/status", s.mgmt.PatchAuthFileStatus)
 		mgmt.PATCH("/auth-files/fields", s.mgmt.PatchAuthFileFields)
 		mgmt.POST("/vertex/import", s.mgmt.ImportVertexCredential)
@@ -672,33 +640,6 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.POST("/iflow-auth-url", s.mgmt.RequestIFlowCookieToken)
 		mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
 		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
-
-		// Backup management routes
-		mgmt.GET("/backups", s.mgmt.ListBackups)
-		mgmt.POST("/backups", s.mgmt.CreateBackup)
-		mgmt.DELETE("/backups/:name", s.mgmt.DeleteBackup)
-		mgmt.GET("/backups/download", s.mgmt.DownloadBackup)
-		mgmt.GET("/backups/download/:name", s.mgmt.DownloadBackup)
-		mgmt.POST("/backups/restore", s.mgmt.RestoreBackup)
-		mgmt.POST("/backups/upload", s.mgmt.UploadAndRestoreBackup)
-
-		// Usage records routes
-		mgmt.GET("/usage-records", s.mgmt.GetUsageRecords)
-		mgmt.GET("/usage-records/:id", s.mgmt.GetUsageRecordByID)
-		mgmt.GET("/usage-records/:id/candidates", s.mgmt.GetRequestCandidates)
-		mgmt.DELETE("/usage-records", s.mgmt.DeleteOldUsageRecords)
-
-		// Usage analytics routes
-		mgmt.GET("/usage-records/heatmap", s.mgmt.GetActivityHeatmap)
-		mgmt.GET("/usage-records/options", s.mgmt.GetUsageRecordOptions)
-		mgmt.GET("/usage-records/model-stats", s.mgmt.GetModelStats)
-		mgmt.GET("/usage-records/provider-stats", s.mgmt.GetProviderStats)
-		mgmt.GET("/usage-records/summary", s.mgmt.GetUsageSummary)
-		mgmt.GET("/usage-records/timeline", s.mgmt.GetRequestTimeline)
-		mgmt.GET("/usage-records/interval-timeline", s.mgmt.GetIntervalTimeline)
-
-		// Dashboard stats route (unified endpoint for dashboard data)
-		mgmt.GET("/dashboard/stats", s.mgmt.GetDashboardStats)
 	}
 }
 
@@ -889,11 +830,6 @@ func (s *Server) Stop(ctx context.Context) error {
 		}
 	}
 
-	if s.usageRecordCleaner != nil {
-		s.usageRecordCleaner.Stop()
-		s.usageRecordCleaner = nil
-	}
-
 	// Shutdown the HTTP server.
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("failed to shutdown HTTP server: %v", err)
@@ -1036,8 +972,6 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		s.mgmt.SetAuthManager(s.handlers.AuthManager)
 	}
 
-	s.configureUsageRecordRetention(cfg)
-
 	// Notify Amp module only when Amp config has changed.
 	ampConfigChanged := oldCfg == nil || !reflect.DeepEqual(oldCfg.AmpCode, cfg.AmpCode)
 	if ampConfigChanged {
@@ -1077,40 +1011,6 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		vertexAICompatCount,
 		openAICompatCount,
 	)
-}
-
-func (s *Server) configureUsageRecordRetention(cfg *config.Config) {
-	if s == nil {
-		return
-	}
-
-	days := 0
-	if cfg != nil {
-		days = cfg.UsageRecordsRetentionDays
-	}
-
-	switch {
-	case days <= 0:
-		if s.usageRecordCleaner != nil {
-			s.usageRecordCleaner.Stop()
-			s.usageRecordCleaner = nil
-			log.Info("usage record retention cleanup disabled")
-		}
-		return
-	case usagerecord.DefaultStore() == nil:
-		log.Warn("usage record retention configured but usage record store is not available")
-		return
-	case s.usageRecordCleaner == nil:
-		s.usageRecordCleaner = usagerecord.NewRetentionCleaner(usagerecord.DefaultStore(), days)
-		s.usageRecordCleaner.Start()
-		log.Infof("usage record retention cleanup enabled: %d days", days)
-		return
-	default:
-		previous := s.usageRecordCleaner.UpdateRetentionDays(days)
-		if previous != days {
-			log.Infof("usage record retention updated: %d -> %d days", previous, days)
-		}
-	}
 }
 
 func (s *Server) SetWebsocketAuthChangeHandler(fn func(bool, bool)) {

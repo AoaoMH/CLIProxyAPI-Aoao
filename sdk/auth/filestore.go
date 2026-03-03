@@ -196,12 +196,7 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 	if provider == "" {
 		provider = "unknown"
 	}
-	providerType := strings.ToLower(strings.TrimSpace(provider))
-	provider = providerType
-	if provider == "gemini" {
-		provider = "gemini-cli"
-	}
-	if providerType == "antigravity" || providerType == "gemini" {
+	if provider == "antigravity" || provider == "gemini" {
 		projectID := ""
 		if pid, ok := metadata["project_id"].(string); ok {
 			projectID = strings.TrimSpace(pid)
@@ -210,7 +205,7 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 			accessToken := extractAccessToken(metadata)
 			// For gemini type, the stored access_token is likely expired (~1h lifetime).
 			// Refresh it using the long-lived refresh_token before querying.
-			if providerType == "gemini" {
+			if provider == "gemini" {
 				if tokenMap, ok := metadata["token"].(map[string]any); ok {
 					if refreshed, errRefresh := refreshGeminiAccessToken(tokenMap, http.DefaultClient); errRefresh == nil {
 						accessToken = refreshed
@@ -220,9 +215,13 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 			if accessToken != "" {
 				fetchedProjectID, errFetch := FetchAntigravityProjectID(context.Background(), accessToken, http.DefaultClient)
 				if errFetch == nil && strings.TrimSpace(fetchedProjectID) != "" {
-					// Only update in-memory metadata; do NOT write to file here.
-					// Writing during read would trigger fsnotify and cause infinite loop.
 					metadata["project_id"] = strings.TrimSpace(fetchedProjectID)
+					if raw, errMarshal := json.Marshal(metadata); errMarshal == nil {
+						if file, errOpen := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600); errOpen == nil {
+							_, _ = file.Write(raw)
+							_ = file.Close()
+						}
+					}
 				}
 			}
 		}
@@ -232,19 +231,6 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 		return nil, fmt.Errorf("stat file: %w", err)
 	}
 	id := s.idFor(path, baseDir)
-	proxyURL := ""
-	if v, ok := metadata["proxy_url"].(string); ok {
-		proxyURL = strings.TrimSpace(v)
-	}
-
-	prefix := ""
-	if rawPrefix, ok := metadata["prefix"].(string); ok {
-		trimmed := strings.TrimSpace(rawPrefix)
-		trimmed = strings.Trim(trimmed, "/")
-		if trimmed != "" && !strings.Contains(trimmed, "/") {
-			prefix = trimmed
-		}
-	}
 	disabled, _ := metadata["disabled"].(bool)
 	status := cliproxyauth.StatusActive
 	if disabled {
@@ -253,13 +239,11 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 	auth := &cliproxyauth.Auth{
 		ID:               id,
 		Provider:         provider,
-		Prefix:           prefix,
 		FileName:         id,
 		Label:            s.labelFor(metadata),
 		Status:           status,
 		Disabled:         disabled,
 		Attributes:       map[string]string{"path": path},
-		ProxyURL:         proxyURL,
 		Metadata:         metadata,
 		CreatedAt:        info.ModTime(),
 		UpdatedAt:        info.ModTime(),

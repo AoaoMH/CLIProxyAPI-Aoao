@@ -22,6 +22,7 @@ archives:
     files:
       - LICENSE
       - README.md
+      - README_CN.md
       - config.example.yaml
 
 checksum:

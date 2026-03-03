@@ -187,7 +187,7 @@ func TestBuildConfigChangeDetails_NilSafe(t *testing.T) {
 func TestBuildConfigChangeDetails_SecretsAndCounts(t *testing.T) {
 	oldCfg := &config.Config{
 		SDKConfig: sdkconfig.SDKConfig{
-			APIKeys: []sdkconfig.ApiKeyEntry{{Key: "a", IsActive: true}},
+			APIKeys: []string{"a"},
 		},
 		AmpCode: config.AmpCode{
 			UpstreamAPIKey: "",
@@ -198,7 +198,7 @@ func TestBuildConfigChangeDetails_SecretsAndCounts(t *testing.T) {
 	}
 	newCfg := &config.Config{
 		SDKConfig: sdkconfig.SDKConfig{
-			APIKeys: []sdkconfig.ApiKeyEntry{{Key: "a", IsActive: true}, {Key: "b", IsActive: true}, {Key: "c", IsActive: true}},
+			APIKeys: []string{"a", "b", "c"},
 		},
 		AmpCode: config.AmpCode{
 			UpstreamAPIKey: "new-key",
@@ -234,7 +234,7 @@ func TestBuildConfigChangeDetails_FlagsAndKeys(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog:                 false,
 			ProxyURL:                   "http://old-proxy",
-			APIKeys:                    []config.ApiKeyEntry{{Key: "key-1", IsActive: true}},
+			APIKeys:                    []string{"key-1"},
 			ForceModelPrefix:           false,
 			NonStreamKeepAliveInterval: 0,
 		},
@@ -272,7 +272,7 @@ func TestBuildConfigChangeDetails_FlagsAndKeys(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog:                 true,
 			ProxyURL:                   "http://new-proxy",
-			APIKeys:                    []config.ApiKeyEntry{{Key: " key-1 ", IsActive: true}, {Key: "key-2", IsActive: true}},
+			APIKeys:                    []string{" key-1 ", "key-2"},
 			ForceModelPrefix:           true,
 			NonStreamKeepAliveInterval: 5,
 		},
@@ -344,7 +344,7 @@ func TestBuildConfigChangeDetails_AllBranches(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog: false,
 			ProxyURL:   "http://old-proxy",
-			APIKeys:    []sdkconfig.ApiKeyEntry{{Key: " keyA ", IsActive: true}},
+			APIKeys:    []string{" keyA "},
 		},
 		OAuthExcludedModels: map[string][]string{"p1": {"a"}},
 		OpenAICompatibility: []config.OpenAICompatibility{
@@ -397,7 +397,7 @@ func TestBuildConfigChangeDetails_AllBranches(t *testing.T) {
 		SDKConfig: sdkconfig.SDKConfig{
 			RequestLog: true,
 			ProxyURL:   "http://new-proxy",
-			APIKeys:    []sdkconfig.ApiKeyEntry{{Key: "keyB", IsActive: true}},
+			APIKeys:    []string{"keyB"},
 		},
 		OAuthExcludedModels: map[string][]string{"p1": {"b", "c"}, "p2": {"d"}},
 		OpenAICompatibility: []config.OpenAICompatibility{
