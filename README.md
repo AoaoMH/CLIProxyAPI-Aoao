@@ -1,7 +1,9 @@
 # CLI Proxy API - Aoao
-自用Fork，请支持原仓库 [CLIProxyAPI](https://github.com/AoaoMe/CLIProxyAPI)
 
-## 使用说明
+自用 Fork，原仓库： https://github.com/router-for-me/CLIProxyAPI
+
+---
+
 CLIProxyAPI Guides: [https://help.router-for.me/](https://help.router-for.me/)
 
 ## Docker
