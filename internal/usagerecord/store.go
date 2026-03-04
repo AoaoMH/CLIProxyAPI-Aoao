@@ -370,6 +370,16 @@ func (s *Store) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_request_candidates_status ON request_candidates(status);
 	CREATE INDEX IF NOT EXISTS idx_request_candidates_best ON request_candidates(request_id, success DESC, candidate_index DESC, retry_index DESC);
 	CREATE INDEX IF NOT EXISTS idx_request_candidates_req_retry ON request_candidates(request_id, retry_index);
+
+	CREATE TABLE IF NOT EXISTS api_key_usage (
+		api_key TEXT PRIMARY KEY,
+		usage_count INTEGER NOT NULL DEFAULT 0,
+		input_tokens INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0,
+		last_used_at DATETIME NOT NULL DEFAULT ''
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_api_key_usage_last_used_at ON api_key_usage(last_used_at);
 	`
 
 	if _, err := s.db.Exec(schema); err != nil {
@@ -1588,6 +1598,121 @@ func (s *Store) GetAPIKeyStats(ctx context.Context) (map[string]*APIKeyStats, er
 	}
 
 	return result, nil
+}
+
+// UpsertAPIKeyUsage upserts aggregated usage stats for one API key.
+func (s *Store) UpsertAPIKeyUsage(ctx context.Context, stats *APIKeyStats) error {
+	if s.isClosed() {
+		return fmt.Errorf("store is closed")
+	}
+	if stats == nil {
+		return nil
+	}
+	apiKey := strings.TrimSpace(stats.APIKey)
+	if apiKey == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO api_key_usage (api_key, usage_count, input_tokens, output_tokens, last_used_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(api_key) DO UPDATE SET
+			usage_count = excluded.usage_count,
+			input_tokens = excluded.input_tokens,
+			output_tokens = excluded.output_tokens,
+			last_used_at = excluded.last_used_at
+	`, apiKey, stats.UsageCount, stats.InputTokens, stats.OutputTokens, strings.TrimSpace(stats.LastUsedAt))
+	if err != nil {
+		return fmt.Errorf("failed to upsert api key usage: %w", err)
+	}
+	return nil
+}
+
+// IncrementAPIKeyUsage increments usage_count and updates last_used_at for one API key.
+func (s *Store) IncrementAPIKeyUsage(ctx context.Context, apiKey, lastUsedAt string) error {
+	if s.isClosed() {
+		return fmt.Errorf("store is closed")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil
+	}
+	lastUsedAt = strings.TrimSpace(lastUsedAt)
+	if lastUsedAt == "" {
+		lastUsedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO api_key_usage (api_key, usage_count, input_tokens, output_tokens, last_used_at)
+		VALUES (?, 1, 0, 0, ?)
+		ON CONFLICT(api_key) DO UPDATE SET
+			usage_count = api_key_usage.usage_count + 1,
+			last_used_at = excluded.last_used_at
+	`, apiKey, lastUsedAt)
+	if err != nil {
+		return fmt.Errorf("failed to increment api key usage: %w", err)
+	}
+	return nil
+}
+
+// IncrementAPIKeyTokens increments token counters for one API key.
+func (s *Store) IncrementAPIKeyTokens(ctx context.Context, apiKey string, inputTokens, outputTokens int64, lastUsedAt string) error {
+	if s.isClosed() {
+		return fmt.Errorf("store is closed")
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil
+	}
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	if outputTokens < 0 {
+		outputTokens = 0
+	}
+	lastUsedAt = strings.TrimSpace(lastUsedAt)
+	if lastUsedAt == "" {
+		lastUsedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO api_key_usage (api_key, usage_count, input_tokens, output_tokens, last_used_at)
+		VALUES (?, 0, ?, ?, ?)
+		ON CONFLICT(api_key) DO UPDATE SET
+			input_tokens = api_key_usage.input_tokens + excluded.input_tokens,
+			output_tokens = api_key_usage.output_tokens + excluded.output_tokens,
+			last_used_at = excluded.last_used_at
+	`, apiKey, inputTokens, outputTokens, lastUsedAt)
+	if err != nil {
+		return fmt.Errorf("failed to increment api key tokens: %w", err)
+	}
+	return nil
+}
+
+// GetAPIKeyUsageStats returns usage stats from dedicated api_key_usage table.
+func (s *Store) GetAPIKeyUsageStats(ctx context.Context) (map[string]*APIKeyStats, error) {
+	if s.isClosed() {
+		return nil, fmt.Errorf("store is closed")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT api_key, usage_count, input_tokens, output_tokens, last_used_at
+		FROM api_key_usage
+		WHERE api_key != ''
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query api_key_usage: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]*APIKeyStats)
+	for rows.Next() {
+		var s APIKeyStats
+		if err := rows.Scan(&s.APIKey, &s.UsageCount, &s.InputTokens, &s.OutputTokens, &s.LastUsedAt); err != nil {
+			continue
+		}
+		s.APIKey = strings.TrimSpace(s.APIKey)
+		if s.APIKey == "" {
+			continue
+		}
+		out[s.APIKey] = &s
+	}
+	return out, nil
 }
 
 // GetRequestTimeline returns hourly request distribution for timeline visualization.

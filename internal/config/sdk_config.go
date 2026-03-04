@@ -5,6 +5,7 @@
 package config
 
 import (
+	"strings"
 	"sync/atomic"
 
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -98,6 +99,25 @@ func (e *ApiKeyEntry) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 	*e = ApiKeyEntry(alias)
 	return nil
+}
+
+// MarshalYAML emits scalar string form when metadata fields are empty/default,
+// so config can be persisted as:
+// api-keys:
+//   - key1
+//   - key2
+func (e ApiKeyEntry) MarshalYAML() (interface{}, error) {
+	key := strings.TrimSpace(e.Key)
+	if key == "" {
+		return "", nil
+	}
+	if e.ID == "" && e.Name == "" && !e.IsActive && e.UsageCount == 0 && e.InputTokens == 0 && e.OutputTokens == 0 && e.LastUsedAt == "" && e.CreatedAt == "" {
+		return key, nil
+	}
+	type alias ApiKeyEntry
+	copy := alias(e)
+	copy.Key = key
+	return copy, nil
 }
 
 // SDKConfig represents the application's configuration, loaded from a YAML file.

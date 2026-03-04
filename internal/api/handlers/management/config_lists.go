@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,7 +10,20 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/usagerecord"
 )
+
+type apiKeyUsageResponse struct {
+	ID           string `json:"id,omitempty"`
+	Key          string `json:"api-key"`
+	Name         string `json:"name,omitempty"`
+	IsActive     bool   `json:"is-active"`
+	UsageCount   int64  `json:"usage-count,omitempty"`
+	InputTokens  int64  `json:"input-tokens,omitempty"`
+	OutputTokens int64  `json:"output-tokens,omitempty"`
+	LastUsedAt   string `json:"last-used-at,omitempty"`
+	CreatedAt    string `json:"created-at,omitempty"`
+}
 
 // Generic helpers for list[string]
 func (h *Handler) putStringList(c *gin.Context, set func([]string), after func()) {
@@ -128,6 +142,41 @@ func apiKeyEntriesToStrings(entries []config.ApiKeyEntry) []string {
 func (h *Handler) GetAPIKeys(c *gin.Context) {
 	// Align to upstream: return a simple list of api key strings.
 	c.JSON(200, gin.H{"api-keys": apiKeyEntriesToStrings(h.cfg.APIKeys)})
+}
+
+// GetAPIKeysUsage returns object entries with usage fields loaded from DB table.
+// This endpoint is for UI pages that need usage metadata while /api-keys remains string-list compatible.
+func (h *Handler) GetAPIKeysUsage(c *gin.Context) {
+	stats := map[string]*usagerecord.APIKeyStats{}
+	if store := usagerecord.DefaultStore(); store != nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
+		if dbStats, err := store.GetAPIKeyUsageStats(ctx); err == nil && dbStats != nil {
+			stats = dbStats
+		}
+	}
+	out := make([]apiKeyUsageResponse, 0, len(h.cfg.APIKeys))
+	for _, entry := range h.cfg.APIKeys {
+		key := strings.TrimSpace(entry.Key)
+		if key == "" {
+			continue
+		}
+		row := apiKeyUsageResponse{
+			ID:        entry.ID,
+			Key:       key,
+			Name:      entry.Name,
+			IsActive:  true,
+			CreatedAt: entry.CreatedAt,
+		}
+		if s, ok := stats[key]; ok && s != nil {
+			row.UsageCount = s.UsageCount
+			row.InputTokens = s.InputTokens
+			row.OutputTokens = s.OutputTokens
+			row.LastUsedAt = s.LastUsedAt
+		}
+		out = append(out, row)
+	}
+	c.JSON(200, gin.H{"api-keys": out})
 }
 
 func (h *Handler) PutAPIKeys(c *gin.Context) {
@@ -504,6 +553,11 @@ func (h *Handler) IncrementAPIKeyUsage(key string) {
 	for i := range h.cfg.APIKeys {
 		if h.cfg.APIKeys[i].Key == key {
 			h.cfg.APIKeys[i].IncrementUsage(now)
+			if store := usagerecord.DefaultStore(); store != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				_ = store.IncrementAPIKeyUsage(ctx, key, now)
+				cancel()
+			}
 			return
 		}
 	}
@@ -527,6 +581,12 @@ func (h *Handler) IncrementAPIKeyTokens(apiKey string, inputTokens, outputTokens
 	for i := range h.cfg.APIKeys {
 		if h.cfg.APIKeys[i].Key == apiKey {
 			h.cfg.APIKeys[i].IncrementTokens(inputTokens, outputTokens)
+			now := time.Now().UTC().Format(time.RFC3339)
+			if store := usagerecord.DefaultStore(); store != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				_ = store.IncrementAPIKeyTokens(ctx, apiKey, inputTokens, outputTokens, now)
+				cancel()
+			}
 			return
 		}
 	}
